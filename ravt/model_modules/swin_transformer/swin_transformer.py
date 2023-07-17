@@ -139,7 +139,7 @@ class SwinTransformerSystem(pl.LightningModule):
         if not self.trainer.sanity_checking:
             for k, v in self.metric.compute().items():
                 if k.lower() == 'map':
-                    self.log('mAP', v, prog_bar=True)
+                    self.log('mAP', v, prog_bar=True, sync_dist=True)
                 else:
                     self.log(k, v)
             self.metric.reset()
@@ -153,7 +153,7 @@ class SwinTransformerSystem(pl.LightningModule):
         if not self.trainer.sanity_checking:
             for k, v in self.metric.compute().items():
                 if k.lower() == 'map':
-                    self.log('mAP', v, prog_bar=True)
+                    self.log('mAP', v, prog_bar=True, sync_dist=True)
                 else:
                     self.log(k, v)
             self.metric.reset()
