@@ -1,0 +1,98 @@
+from typing import Any, TypeVar
+
+import typeguard
+import torch
+import numpy as np
+
+
+ArrayType = TypeVar('ArrayType', torch.Tensor, np.ndarray)
+
+
+@typeguard.typechecked()
+def slice_along(
+        arr: ArrayType, axis: int, start: int, end: int, step: int = 1
+) -> ArrayType:
+    """Slice the array along a specific dimension.
+
+    :param arr: the array to be sliced, `np.ndarray` or `torch.Tensor`
+    :param axis: the dimension to slice
+    :param start: the start of slice
+    :param end: the end of slice
+    :param step: the step of slice
+    :return: the sliced array
+    """
+    return arr[(slice(None), ) * (axis % arr.ndim) + (slice(start, end, step),)]
+
+
+@typeguard.typechecked()
+def clip_or_pad_along(
+        arr: ArrayType, axis: int, fixed_length: int, pad_value: Any = 0
+) -> ArrayType:
+    """Clip or pad the array along a specific dimension to a length of `fixed_length`. Pad with `pad_value`.
+
+    :param arr:
+    :param axis:
+    :param fixed_length:
+    :param pad_value:
+    :return:
+    """
+    if arr.shape[axis] > fixed_length:
+        return slice_along(arr, axis, 0, fixed_length)
+    elif arr.shape[axis] < fixed_length:
+        if isinstance(arr, np.ndarray):
+            pad_widths = [(0, 0)] * arr.ndim
+            pad_widths[axis] = (0, fixed_length - arr.shape[axis])
+            return np.pad(arr, pad_widths, constant_values=pad_value)
+        else:
+            pad_widths = [0] * (2 * arr.ndim)
+            pad_widths[-2*(axis % arr.ndim)-1] = fixed_length - arr.shape[axis]
+            res = torch.nn.functional.pad(arr, pad_widths, value=pad_value)
+            return res
+    else:
+        return arr
+
+
+@typeguard.typechecked()
+def remove_pad_along(
+        arr: ArrayType, axis: int, pad_value: Any = 0
+) -> ArrayType:
+    """Remove the pad along a specific dimension.
+
+    :param arr:
+    :param axis:
+    :param pad_value:
+    :return:
+    """
+    data_length = 0
+    if isinstance(arr, np.ndarray):
+        for a in np.split(arr, arr.shape[axis],axis=axis):
+            if np.isnan(pad_value) and np.all(np.isnan(a)):
+                break
+            elif not np.isnan(pad_value) and np.all(a == pad_value):
+                break
+            else:
+                data_length += 1
+        return slice_along(arr, axis, 0, max(data_length, 1))
+    else:
+        for a in torch.split(arr, 1, dim=axis):
+            if np.isnan(pad_value) and torch.all(torch.isnan(a)):
+                break
+            elif not np.isnan(pad_value) and torch.all(a == pad_value):
+                break
+            else:
+                data_length += 1
+        return slice_along(arr, axis, 0, max(data_length, 1))
+
+
+@typeguard.typechecked()
+def xyxy2cxcywh(coordinates: ArrayType) -> ArrayType:
+    cxcy = (coordinates[..., :2] + coordinates[..., 2:]) / 2
+    wh = (coordinates[..., 2:] - coordinates[..., :2])
+    return np.concatenate([cxcy, wh], axis=-1) if isinstance(coordinates, np.ndarray) else torch.cat([cxcy, wh], dim=-1)
+
+
+@typeguard.typechecked()
+def xyxy2xywh(coordinates: ArrayType) -> ArrayType:
+    xy = coordinates[..., :2]
+    wh = coordinates[..., 2:] - coordinates[..., :2]
+    return np.concatenate([xy, wh], axis=-1) if isinstance(coordinates, np.ndarray) else torch.cat([xy, wh], dim=-1)
