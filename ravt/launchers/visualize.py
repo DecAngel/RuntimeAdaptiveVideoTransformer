@@ -6,7 +6,7 @@ import pytorch_lightning as pl
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.trainer.states import TrainerStatus
 
-from ravt.common.lightning_logger import ravt_logger as logger
+from ravt.utils.lightning_logger import ravt_logger as logger
 from ravt.configs import output_train_log_dir, output_visualize_dir
 
 

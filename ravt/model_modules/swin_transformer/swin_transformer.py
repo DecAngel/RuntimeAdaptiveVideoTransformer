@@ -56,7 +56,7 @@ class SwinTransformerSystem(pl.LightningModule):
         self.save_hyperparameters(ignore='kwargs')
 
         self.backbone = SwinTransformerBackbone(**self.hparams)
-        self.head = YOLOXHead(width=1.0, **self.hparams)
+        self.head = YOLOXHead(width_ratio=1.0, **self.hparams)
         self.metric = COCOEvalMAPMetric()
         self.register_buffer('norm_mean', torch.tensor(self.hparams.norm_mean))
         self.register_buffer('norm_std', torch.tensor(self.hparams.norm_std))
@@ -116,7 +116,7 @@ class SwinTransformerSystem(pl.LightningModule):
     ):
         if not self.trainer.sanity_checking:
             if image_ids is not None:
-                self.log('image_id', image_ids[0].float(), batch_size=image_ids.shape[0], on_step=True, prog_bar=True)
+                self.log('image_id', image_ids[0].float(), batch_size=image_ids.shape[0], on_step=True, on_epoch=False, prog_bar=True)
             if seq_ids is not None:
                 self.log('seq_id', seq_ids[0].float(), on_step=True)
             if frame_ids is not None:
@@ -185,9 +185,12 @@ def swin_transformer_small_patch4_window7(
         **kwargs
     )
     if pretrained:
+        def modify_pth(pth: Dict) -> Dict:
+            return pth['state_dict']
+
         file = weight_pretrained_dir.joinpath('cascade_mask_rcnn_swin_small_patch4_window7.pth')
         if file.exists():
-            model.load_state_dict(torch.load(str(file)), strict=False)
+            model.load_state_dict(modify_pth(torch.load(str(file))), strict=False)
         else:
             raise FileNotFoundError(
                 f'pretrained file cascade_mask_rcnn_swin_small_patch4_window7.pth '

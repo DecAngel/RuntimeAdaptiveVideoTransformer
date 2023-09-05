@@ -1,0 +1,1 @@
+from .streamyolo import StreamYOLOLR

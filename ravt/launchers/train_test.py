@@ -1,122 +1,124 @@
+import functools
 import platform
 import datetime
-from typing import Dict, List, TypedDict, Optional
+from typing import List, TypedDict, Optional
 
 import pytorch_lightning as pl
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.trainer.states import TrainerStatus
 
-from ravt.common.lightning_logger import ravt_logger as logger
-from ravt.common.hashtags import module_hash
-from ravt.configs import output_train_log_dir, output_ckpt_dir, weight_pretrained_dir
+from ravt.utils.lightning_logger import ravt_logger as logger
+from ravt.utils.hashtags import module_hash
+from ravt.protocols.classes import BaseLauncher, BaseModel, BaseDataset
+from ravt.protocols.structures import InternalConfigs, ConfigTypes
 
 
-def run_train(
-        model: pl.LightningModule,
-        data_module: pl.LightningDataModule,
-        device_ids: Optional[List[int]] = None,
-        debug: bool = __debug__,
-        **kwargs,
-) -> TypedDict('OutputTypedDict', {
-    'val_mAP': float,
-}):
-    tag = '_'.join([
-        datetime.datetime.now().strftime('%y%m%d_%H%M%S'),
-        data_module.__class__.__name__[:6],
-        model.__class__.__name__[:6],
-        module_hash(data_module),
-        module_hash(model),
-    ])
-    device_ids = device_ids or [0]
-    trainer = pl.Trainer(
-        default_root_dir=str(output_train_log_dir),
-        accelerator='gpu',
-        devices=device_ids,
-        callbacks=[
-            pl.callbacks.ModelSummary(max_depth=2),
-            pl.callbacks.ModelCheckpoint(monitor='mAP', mode='max', dirpath=str(output_ckpt_dir), filename=tag),
-            pl.callbacks.LearningRateMonitor(logging_interval='step'),
-        ],
-        strategy=(
-            DDPStrategy(find_unused_parameters=False)
-            if platform.system() == 'Linux' and len(device_ids) > 1
-            else 'auto'
-        ),
-        precision=16,
-        max_epochs=3 if debug else 100,
-        limit_train_batches=10 if debug else None,
-        limit_val_batches=10 if debug else None,
-        detect_anomaly=False if debug else False,
-        profiler='simple' if debug else None,
-    )
+class TrainTestLauncher(BaseLauncher):
+    def __init__(
+            self,
+            model: BaseModel,
+            dataset: BaseDataset,
+            configs: Optional[InternalConfigs] = None,
+            device_ids: Optional[List[int]] = None,
+            debug: bool = __debug__,
+    ):
+        super().__init__()
+        self.model = model
+        self.dataset = dataset
+        self.configs = configs
+        self.device_ids = device_ids or [0]
+        self.debug = debug
+        self.output_ckpt_dir = None
+        self.output_train_log_dir = None
 
-    trainer.fit(model, datamodule=data_module)
+    @functools.cached_property
+    def tag(self):
+        return '_'.join([
+            datetime.datetime.now().strftime('%y%m%d_%H%M%S'),
+            self.dataset.__class__.__name__[:6],
+            self.model.__class__.__name__[:6],
+            module_hash(self.dataset),
+            module_hash(self.model),
+        ])
 
-    if trainer.state.status == TrainerStatus.INTERRUPTED:
-        # keyboard exit
-        logger.warning('Ctrl+C detected. Shutting down training procedure.')
-        raise KeyboardInterrupt()
+    def phase_init_impl(self, phase: ConfigTypes, configs: InternalConfigs) -> InternalConfigs:
+        if phase == 'launcher':
+            self.output_train_log_dir = configs['environment']['output_train_log_dir']
+            self.output_ckpt_dir = configs['environment']['output_ckpt_dir']
+        return configs
 
-    return {
-        'val_mAP': round(trainer.logged_metrics['mAP'].item(), 3),
-    }
+    def train(self) -> TypedDict('TrainResult', {'eval_mAP': float}):
+        self.phase_init(self.configs)
+        trainer = pl.Trainer(
+            default_root_dir=str(self.output_train_log_dir),
+            accelerator='gpu',
+            devices=self.device_ids,
+            callbacks=[
+                pl.callbacks.ModelSummary(max_depth=2),
+                pl.callbacks.ModelCheckpoint(
+                    monitor='mAP', mode='max', dirpath=str(self.output_ckpt_dir), filename=self.tag
+                ),
+                pl.callbacks.LearningRateMonitor(logging_interval='step'),
+            ],
+            strategy=(
+                DDPStrategy(find_unused_parameters=False)
+                if platform.system() == 'Linux' and len(self.device_ids) > 1
+                else 'auto'
+            ),
+            precision='16-mixed',
+            max_epochs=2 if self.debug else 100,
+            limit_train_batches=20 if self.debug else None,
+            limit_val_batches=20 if self.debug else None,
+            detect_anomaly=False if self.debug else False,
+            profiler='simple' if self.debug else None,
+        )
+        trainer.fit(self.model, datamodule=self.dataset)
 
+        if trainer.state.status == TrainerStatus.INTERRUPTED:
+            # keyboard exit
+            logger.warning('Ctrl+C detected. Shutting down training procedure.')
+            raise KeyboardInterrupt()
 
-def run_test(
-        model: pl.LightningModule,
-        data_module: pl.LightningDataModule,
-        from_best_ckpt: bool = True,
-        device_ids: Optional[List[int]] = None,
-        debug: bool = __debug__,
-        **kwargs,
-) -> TypedDict('OutputTypedDict', {
-    'val_mAP': float,
-}):
-    device_ids = device_ids or [0]
-    trainer = pl.Trainer(
-        default_root_dir=str(output_train_log_dir),
-        accelerator='gpu',
-        devices=device_ids,
-        callbacks=[
-            pl.callbacks.ModelSummary(max_depth=0),
-        ],
-        strategy=(
-            DDPStrategy(find_unused_parameters=False)
-            if platform.system() == 'Linux' and len(device_ids) > 1
-            else 'auto'
-        ),
-        precision=16,
-        enable_checkpointing=False,
-        limit_test_batches=10 if debug else None,
-        logger=False,
-    )
+        return {
+            'eval_mAP': round(trainer.logged_metrics['mAP'].item(), 3),
+        }
 
-    if from_best_ckpt:
-        hash_tag = module_hash(model)
-        for file in sorted(output_ckpt_dir.iterdir(), reverse=True):
-            if hash_tag in file.name:
-                ckpt_path = str(file)
-                break
+    def test(self, from_best_ckpt: bool = True) -> TypedDict('TestResult', {'test_mAP': float}):
+        self.phase_init(self.configs)
+        trainer = pl.Trainer(
+            default_root_dir=str(self.output_train_log_dir),
+            accelerator='gpu',
+            devices=self.device_ids,
+            callbacks=[
+                pl.callbacks.ModelSummary(max_depth=0),
+            ],
+            strategy=(
+                DDPStrategy(find_unused_parameters=False)
+                if platform.system() == 'Linux' and len(self.device_ids) > 1
+                else 'auto'
+            ),
+            precision='16-mixed',
+            enable_checkpointing=False,
+            limit_test_batches=20 if self.debug else None,
+            logger=False,
+        )
+
+        if from_best_ckpt:
+            hash_tag = module_hash(self.model)
+            for file in sorted(self.output_ckpt_dir.iterdir(), reverse=True):
+                if hash_tag in file.name:
+                    ckpt_path = str(file)
+                    break
+            else:
+                raise FileNotFoundError(f'Cannot find checkpoint with hash tag {hash_tag}')
         else:
-            raise FileNotFoundError(f'Cannot find checkpoint with hash tag {hash_tag}')
-    else:
-        ckpt_path = None
+            ckpt_path = None
 
-    trainer.test(model, datamodule=data_module, ckpt_path=ckpt_path)
+        trainer.test(self.model, datamodule=self.dataset, ckpt_path=ckpt_path)
 
-    if trainer.state.status == TrainerStatus.INTERRUPTED:
-        # keyboard exit
-        logger.warning('Ctrl+C detected. Shutting down testing procedure.')
-        raise KeyboardInterrupt()
+        if trainer.state.status == TrainerStatus.INTERRUPTED:
+            # keyboard exit
+            logger.warning('Ctrl+C detected. Shutting down testing procedure.')
+            raise KeyboardInterrupt()
 
-    return round(trainer.logged_metrics['mAP'].item(), 3)
-
-
-def run_train_and_test(
-        model: pl.LightningModule,
-        data_module: pl.LightningDataModule,
-        device_ids: Optional[List[int]] = None,
-        debug: bool = __debug__,
-):
-    run_train(model=model, data_module=data_module, device_ids=device_ids, debug=debug)
-    run_test(model=model, data_module=data_module, from_best_ckpt=True, device_ids=device_ids, debug=debug)
+        return {'test_mAP': round(trainer.logged_metrics['mAP'].item(), 3)}
