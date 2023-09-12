@@ -1,6 +1,6 @@
 from typing import List, get_args
 
-from ..structures import InternalConfigs, ConfigTypes
+from ..structures import InternalConfigs, ConfigTypes, EnvironmentConfigs
 
 
 class PhaseInitMixin:
@@ -11,7 +11,7 @@ class PhaseInitMixin:
 
     def __setattr__(self, key, value):
         if isinstance(value, PhaseInitMixin):
-            self._init_phase_children = value
+            super().__getattribute__('_init_phase_children').append(value)
         return super().__setattr__(key, value)
 
     def _phase_init_sequence(self) -> List['PhaseInitMixin']:
@@ -21,24 +21,35 @@ class PhaseInitMixin:
             self._init_phase_done = True
 
         res = [self]
-        res.extend([c._phase_init_sequence() for c in self._init_phase_children])
+        for c in self._init_phase_children:
+            res.extend(c._phase_init_sequence())
         return res
 
     def _phase_init_super(self, phase: ConfigTypes, configs: InternalConfigs) -> InternalConfigs:
-        s = super()
-        if isinstance(s, PhaseInitMixin):
-            configs = s._phase_init_super(phase, configs)
-
-        try:
-            configs = self.phase_init_impl(phase, configs)
-        except NotImplementedError:
-            pass
+        for s in [super(c, self) for c in self.__class__.mro()[-2::-1]] + [self]:
+            if hasattr(s, 'phase_init_impl'):
+                try:
+                    configs = s.phase_init_impl(phase, configs)
+                except NotImplementedError:
+                    pass
         return configs
+
+    def add_phase_module(self, module: 'PhaseInitMixin'):
+        self._init_phase_children.append(module)
 
     def phase_init_impl(self, phase: ConfigTypes, configs: InternalConfigs) -> InternalConfigs:
         raise NotImplementedError()
 
-    def phase_init(self, configs: InternalConfigs) -> InternalConfigs:
+    def phase_init(self, envs: EnvironmentConfigs) -> InternalConfigs:
+        configs = {
+            'environment': envs,
+            'launcher': {},
+            'dataset': {},
+            'model': {},
+            'evaluation': {},
+            'visualization': {},
+            'summary': {}
+        }
         init_list = self._phase_init_sequence()
         for p in get_args(ConfigTypes):
             for i in init_list:

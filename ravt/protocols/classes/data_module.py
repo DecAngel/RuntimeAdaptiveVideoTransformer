@@ -6,10 +6,11 @@ from pycocotools.coco import COCO
 from torch.utils.data import Dataset, DataLoader, default_collate
 
 from ..structures import (
-    BatchDict, DatasetConfigsRequiredKeys, ComponentDict,
+    BatchDict, BatchKeys, ComponentDict,
     InternalConfigs, SubsetTypes, ComponentTypes, StageTypes
 )
 from .phase_init import PhaseInitMixin, ConfigTypes
+from ravt.utils.lightning_logger import ravt_logger as logger
 
 
 class BaseDataset(PhaseInitMixin, pl.LightningDataModule):
@@ -18,7 +19,7 @@ class BaseDataset(PhaseInitMixin, pl.LightningDataModule):
                 self,
                 dataset: 'BaseDataset',
                 subset: SubsetTypes,
-                required_keys: DatasetConfigsRequiredKeys,
+                required_keys: BatchKeys,
         ):
             self.dataset = dataset
             self.subset = subset
@@ -39,10 +40,11 @@ class BaseDataset(PhaseInitMixin, pl.LightningDataModule):
             seq_id, frame_id = self.items[item]
             batch: BatchDict = {}
             for key in get_args(ComponentTypes):  # type: ComponentTypes
-                batch[key] = default_collate([
-                    self.dataset.get_component(self.subset, key, seq_id, frame_id + i)
-                    for i in self.required_keys['components'][key]
-                ])
+                if key in self.required_keys.keys():
+                    batch[key] = default_collate([
+                        self.dataset.get_component(self.subset, key, seq_id, frame_id + i)
+                        for i in self.required_keys[key]
+                    ])
             return batch
 
     def __init__(
@@ -72,6 +74,11 @@ class BaseDataset(PhaseInitMixin, pl.LightningDataModule):
         raise NotImplementedError()
 
     def init_loader_factory(self, subset: SubsetTypes) -> Callable[[], DataLoader]:
+        def worker_init_fn(worker_id: int):
+            import cv2
+            cv2.setNumThreads(0)
+            logger.info(f'Initializing dataloader worker {worker_id}')
+
         train = subset == 'train'
         dataset = BaseDataset.WrapperClipDataset(
             self, subset, self.hparams.required_keys_train if train else self.hparams.required_keys_eval
@@ -82,8 +89,9 @@ class BaseDataset(PhaseInitMixin, pl.LightningDataModule):
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
             shuffle=train,
-            pin_memory=True,
+            pin_memory=False,
             persistent_workers=True if self.hparams.num_workers > 0 else False,
+            worker_init_fn=worker_init_fn,
         )
 
     def phase_init_impl(self, phase: ConfigTypes, configs: InternalConfigs) -> InternalConfigs:

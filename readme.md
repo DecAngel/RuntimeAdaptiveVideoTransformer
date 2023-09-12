@@ -13,7 +13,7 @@ python -m pip install pytorch-lightning
 ```
 - install image libs
 ```shell
-python -m pip install opencv-python timm imgaug
+python -m pip install opencv-python timm imgaug kornia kornia-rs
 ```
 - install evaluation libs
 ```shell
@@ -23,3 +23,8 @@ python -m pip install pycocotools tensorboard sap_toolkit
 ```shell
 python -m pip install typeguard==3.0.2 jaxtyping
 ```
+
+
+## TODO
+- [ ] implement 3d attention
+- [ ] fix phase init call multiple times 

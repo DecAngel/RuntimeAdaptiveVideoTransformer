@@ -22,43 +22,44 @@ class EnvironmentConfigs(TypedDict, total=False):
     tensorboard_port: int
 
 
-class DatasetConfigsRequiredKeysComponent(TypedDict, total=False):
-    meta: List[int]
+class LauncherConfigs(TypedDict, total=False):
+    pass
+
+
+class BatchKeys(TypedDict, total=False):
+    interval: int
+    margin: int
     image: List[int]
     bbox: List[int]
 
 
-class DatasetConfigsRequiredKeys(TypedDict, total=False):
-    interval: int
-    margin: int
-    components: DatasetConfigsRequiredKeysComponent
-
-
 class DatasetConfigs(TypedDict, total=False):
-    required_keys_train: DatasetConfigsRequiredKeys
-    required_keys_eval: DatasetConfigsRequiredKeys
-
-
-class PreprocessConfigs(TypedDict, total=False):
-    pass
+    required_keys_train: BatchKeys
+    required_keys_eval: BatchKeys
 
 
 class ModelConfigs(TypedDict, total=False):
     pass
 
 
-class PostprocessConfigs(TypedDict, total=False):
+class EvaluationConfigs(TypedDict, total=False):
+    coco_factory: Callable[[], Optional[COCO]]
+    produced_keys: BatchKeys
+
+
+class VisualizationConfigs(TypedDict, total=False):
     pass
 
 
-class EvaluationConfigs(TypedDict, total=False):
-    coco_factory: Callable[[], Optional[COCO]]
+class SummaryConfigs(TypedDict, total=False):
+    pass
 
 
 class InternalConfigs(TypedDict):
     environment: EnvironmentConfigs
+    launcher: LauncherConfigs
     dataset: DatasetConfigs
-    preprocess: PreprocessConfigs
     model: ModelConfigs
-    postprocess: PostprocessConfigs
     evaluation: EvaluationConfigs
+    visualization: VisualizationConfigs
+    summary: SummaryConfigs

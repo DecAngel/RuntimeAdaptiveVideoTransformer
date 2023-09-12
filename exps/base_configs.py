@@ -28,36 +28,19 @@ sys.path.append(str(ravt_dir))
 # Other configs
 tensorboard_port = 8189
 
-base_configs = {
-    'environment': {
-        'root_dir': root_dir,
-        'ravt_dir': ravt_dir,
-        'output_dir': output_dir,
-        'output_ckpt_dir': output_ckpt_dir,
-        'output_result_dir': output_result_dir,
-        'output_visualize_dir': output_visualize_dir,
-        'output_train_log_dir': output_train_log_dir,
-        'output_sap_log_dir': output_sap_log_dir,
-        'weight_dir': weight_dir,
-        'weight_benchmark_dir': weight_benchmark_dir,
-        'weight_pretrained_dir': weight_pretrained_dir,
-        'weight_trained_dir': weight_trained_dir,
-        'dataset_dir': dataset_dir,
-        'tensorboard_port': tensorboard_port,
-    },
-    'dataset': {
-
-    },
-    'preprocess': {
-
-    },
-    'model': {
-
-    },
-    'postprocess': {
-
-    },
-    'evaluation': {
-
-    }
+environment_configs = {
+    'root_dir': root_dir,
+    'ravt_dir': ravt_dir,
+    'output_dir': output_dir,
+    'output_ckpt_dir': output_ckpt_dir,
+    'output_result_dir': output_result_dir,
+    'output_visualize_dir': output_visualize_dir,
+    'output_train_log_dir': output_train_log_dir,
+    'output_sap_log_dir': output_sap_log_dir,
+    'weight_dir': weight_dir,
+    'weight_benchmark_dir': weight_benchmark_dir,
+    'weight_pretrained_dir': weight_pretrained_dir,
+    'weight_trained_dir': weight_trained_dir,
+    'dataset_dir': dataset_dir,
+    'tensorboard_port': tensorboard_port,
 }

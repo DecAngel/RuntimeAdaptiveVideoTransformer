@@ -6,7 +6,8 @@ import torch.nn as nn
 from jaxtyping import Float
 from torch.nn import functional as F
 
-from ..layers import CSPDarknet, DWConv, BaseConv, CSPLayer
+from .darknet import CSPDarknet
+from .network_blocks import DWConv, BaseConv, CSPLayer
 
 
 class YOLOXPAFPNBackbone(nn.Module):

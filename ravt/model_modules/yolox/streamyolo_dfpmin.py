@@ -1,22 +1,21 @@
 from pathlib import Path
-from typing import Optional, Union, Dict, Tuple, Literal, Callable
+from typing import Optional, Dict, Tuple, Literal, Callable, Union
 
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch import nn
 
-from .blocks import YOLOXPAFPNBackbone, YOLOXHead, StreamYOLOScheduler, get_pth_adapter
+from .blocks import YOLOXPAFPNBackbone, DFPMIN, TALHead, StreamYOLOScheduler, get_pth_adapter
 from ..augmentation import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 from ravt.protocols.classes import BaseModel
 from ravt.protocols.structures import (
     BatchDict, PredDict, LossDict, BatchKeys,
 )
-from ravt.utils.lightning_logger import ravt_logger as logger
 
 
-class YOLOXSystem(BaseModel):
+class StreamYOLODFPMINSystem(BaseModel):
     def __init__(
             self,
             # structural parameters
@@ -57,7 +56,8 @@ class YOLOXSystem(BaseModel):
         )
         self.save_hyperparameters(ignore=['kwargs', 'pretrain_adapter'])
         self.backbone = YOLOXPAFPNBackbone(**self.hparams)
-        self.head = YOLOXHead(**self.hparams)
+        self.neck = DFPMIN(**self.hparams)
+        self.head = TALHead(**self.hparams)
 
         def init_yolo(M):
             for m in M.modules():
@@ -71,19 +71,19 @@ class YOLOXSystem(BaseModel):
     def example_input_array(self) -> Tuple[BatchDict]:
         return {
             'image': {
-                'image_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'seq_id': torch.ones(4, 1, dtype=torch.int32),
-                'frame_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'image': torch.rand(4, 1, 3, 600, 960, dtype=torch.float32),
-                'original_size': torch.ones(4, 1, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
+                'image_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
+                'seq_id': torch.ones(4, 2, dtype=torch.int32),
+                'frame_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
+                'image': torch.rand(4, 2, 3, 600, 960, dtype=torch.float32),
+                'original_size': torch.ones(4, 2, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
             'bbox': {
-                'image_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'seq_id': torch.ones(4, 1, dtype=torch.int32),
-                'frame_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'coordinate': torch.zeros(4, 1, 100, 4, dtype=torch.float32),
-                'label': torch.zeros(4, 1, 100, dtype=torch.int32),
-                'probability': torch.zeros(4, 1, 100, dtype=torch.float32),
+                'image_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
+                'seq_id': torch.ones(4, 2, dtype=torch.int32),
+                'frame_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
+                'coordinate': torch.zeros(4, 2, 100, 4, dtype=torch.float32),
+                'label': torch.zeros(4, 2, 100, dtype=torch.int32),
+                'probability': torch.zeros(4, 2, 100, dtype=torch.float32),
             }
         },
 
@@ -91,26 +91,26 @@ class YOLOXSystem(BaseModel):
     def required_keys_train(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': 0,
-            'image': [0],
-            'bbox': [0],
+            'margin': 3,
+            'image': [0, 1],
+            'bbox': [1, 2],
         }
 
     @property
     def required_keys_eval(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': 0,
-            'image': [0],
-            'bbox': [0]
+            'margin': 3,
+            'image': [0, 1],
+            'bbox': [1, 2]
         }
 
     @property
     def produced_keys(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': 0,
-            'bbox': [0],
+            'margin': 3,
+            'bbox': [2],
         }
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
@@ -120,26 +120,24 @@ class YOLOXSystem(BaseModel):
 
         images *= 255.0
 
-        image1, = images.unbind(1)
-        feature1 = self.backbone(image1)
-
+        image0, image1 = images.unbind(1)
+        feature0, feature1 = self.backbone(image0), self.backbone(image1)
+        feature2 = self.neck((feature0, feature1))
         if self.training:
-            coordinate1, = coordinates.unbind(1)
-            label1, = labels.unbind(1)
             loss_dict = self.head(
-                feature1,
-                gt_coordinates=coordinate1,
-                gt_labels=label1,
+                feature2,
+                gt_coordinates=coordinates,
+                gt_labels=labels,
                 shape=image1.shape[-2:]
             )
             return loss_dict
         else:
-            pred_dict = self.head(feature1, shape=image1.shape[-2:])
+            pred_dict = self.head(feature2, shape=image1.shape[-2:])
             return {
                 'bbox': {
-                    'image_id': batch['image']['image_id'],
-                    'seq_id': batch['image']['seq_id'],
-                    'frame_id': batch['image']['frame_id'],
+                    'image_id': torch.add(batch['image']['image_id'][:, -1:], 1),
+                    'seq_id': batch['image']['seq_id'][:, -1:],
+                    'frame_id': torch.add(batch['image']['frame_id'][:, -1:], 1),
                     'coordinate': pred_dict['pred_coordinates'].unsqueeze(1),
                     'label': pred_dict['pred_labels'].unsqueeze(1),
                     'probability': pred_dict['pred_probabilities'].unsqueeze(1),
@@ -163,7 +161,7 @@ class YOLOXSystem(BaseModel):
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
 
-def yolox_s(
+def streamyolo_dfpmin_s(
         pretrained: bool = True,
         num_classes: int = 8,
         conf_thre: float = 0.01,
@@ -171,8 +169,8 @@ def yolox_s(
         lr: float = 0.001,
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
-) -> YOLOXSystem:
-    return YOLOXSystem(
+) -> StreamYOLODFPMINSystem:
+    return StreamYOLODFPMINSystem(
         num_classes=num_classes,
         pretrain_adapter=get_pth_adapter('yolox_s.pth') if pretrained else None,
         conf_thre=conf_thre,

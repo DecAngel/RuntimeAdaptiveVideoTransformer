@@ -30,10 +30,10 @@ def clip_or_pad_along(
 ) -> ArrayType:
     """Clip or pad the array along a specific dimension to a length of `fixed_length`. Pad with `pad_value`.
 
-    :param arr:
-    :param axis:
+    :param arr: the array to be clipped or padded, `np.ndarray` or `torch.Tensor`
+    :param axis: the index of the dimension
     :param fixed_length:
-    :param pad_value:
+    :param pad_value: the value to pad
     :return:
     """
     if arr.shape[axis] > fixed_length:

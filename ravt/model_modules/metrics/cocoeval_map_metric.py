@@ -12,7 +12,7 @@ from pycocotools.coco import COCO
 from ravt.protocols.structures import ConfigTypes, InternalConfigs
 from ravt.utils.array_operations import xyxy2xywh
 from ravt.utils.lightning_logger import ravt_logger
-from ravt.protocols.structures import BatchDict, MetricDict
+from ravt.protocols.structures import BatchDict, PredDict, MetricDict
 from ravt.protocols.classes import BaseMetric
 
 
@@ -61,28 +61,35 @@ class COCOEvalMAPMetric(BaseMetric):
     def update(
             self,
             batch: BatchDict,
-            pred: BatchDict,
+            pred: PredDict,
             **kwargs
     ) -> None:
         # target is ignored
-        r = batch['image']['resize_ratio'][:, None, [1, 0, 1, 0]]
-        pred_coordinates = xyxy2xywh(r*pred['bbox']['coordinate'])
+        original_size = batch['image']['original_size'][:, :1, None, :]
+        current_size = torch.tensor(batch['image']['image'].shape[-2:], dtype=torch.float32, device=self.device)
+        r = (original_size / current_size)[..., [1, 0, 1, 0]]
 
-        for coordinates, probabilities, labels, image_id in zip(
-                pred_coordinates.cpu().numpy(),
-                pred['bbox']['probability'].cpu().numpy(),
-                pred['bbox']['label'].cpu().numpy(),
-                pred['meta']['image_id'].cpu().numpy(),
-        ):
-            for l, c, p in zip(labels.tolist(), coordinates.tolist(), probabilities.tolist()):
-                if abs(p) > 1e-5:
-                    self.predict_list.append({
-                        'image_id': image_id.item(),
-                        'category_id': l,
-                        'bbox': c,
-                        'score': p,
-                        'segmentation': [],
-                    })
+        pred_coordinates = xyxy2xywh(r*pred['bbox']['coordinate']).cpu().numpy()
+        pred_labels = pred['bbox']['label'].cpu().numpy()
+        pred_probabilities = pred['bbox']['probability'].cpu().numpy()
+        image_ids = pred['bbox']['image_id'].cpu().numpy()
+
+        for b in range(image_ids.shape[0]):
+            for t in range(image_ids.shape[1]):
+                i = image_ids[b, t].item()
+                for c, l, p in zip(
+                        pred_coordinates[b, t].tolist(),
+                        pred_labels[b, t].tolist(),
+                        pred_probabilities[b, t].tolist(),
+                ):
+                    if abs(p) > 1e-5:
+                        self.predict_list.append({
+                            'image_id': i,
+                            'category_id': l,
+                            'bbox': c,
+                            'score': p,
+                            'segmentation': [],
+                        })
 
     def compute(self) -> MetricDict:
         # gt, outputs

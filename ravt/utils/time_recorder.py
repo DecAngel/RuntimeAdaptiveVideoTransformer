@@ -1,9 +1,11 @@
+import functools
 import sys
 import os
 import time
 from typing import Optional, TextIO
 from collections import defaultdict
 
+import torch.multiprocessing as mp
 import numpy as np
 
 
@@ -53,3 +55,31 @@ class TimeRecorder:
 
     def print(self):
         print(self.__str__(), file=self.file)
+
+
+"""
+manager = mp.Manager()
+time_measure_dict = manager.dict()
+
+
+def time_measured(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        global manager, time_measure_dict
+        start_time = time.time()
+        res = fn(*args, **kwargs)
+        duration = time.time()-start_time
+        if fn.__name__ not in time_measure_dict.keys():
+            time_measure_dict[fn.__name__] = manager.list([duration])
+        else:
+            time_measure_dict[fn.__name__].append(duration)
+        # print(f'{fn.__name__}: {duration:.3f}s')
+        return res
+    return wrapper
+
+
+def time_summary():
+    global time_measure_dict
+    for k, v in time_measure_dict.items():
+        print(f'{k}:\n\ttotal number: {len(v)}\n\tmean time: {sum(v)/len(v):.3f}s')
+"""

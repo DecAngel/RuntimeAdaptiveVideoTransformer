@@ -1,7 +1,7 @@
 from typing import TypedDict
 
 import torch
-from jaxtyping import Float, Int, UInt, Shaped
+from jaxtyping import Float, Int, Shaped
 
 
 """Meta Type"""
@@ -23,31 +23,31 @@ class MetaBatchDict(TypedDict, total=False):
 
 """Image Type"""
 ImageType = Float[torch.Tensor, 'channel height width']
-ImageRatioType = Float[torch.Tensor, 'hw=2']
+ImageSizeType = Int[torch.Tensor, 'hw=2']
 
 
-class ImageComponentDict(TypedDict):
+class ImageComponentDict(MetaComponentDict):
     """Image component of a batch.
 
     image: a BGR image with CHW shape normalized to 0-1
     resize_ratio: Original HW size / current HW size
     """
     image: ImageType
-    resize_ratio: ImageRatioType
+    original_size: ImageSizeType
 
 
-class ImageBatchDict(TypedDict, total=False):
+class ImageBatchDict(MetaBatchDict, total=False):
     image: Shaped[ImageType, '*batch_size time_c']
-    resize_ratio: Shaped[ImageRatioType, '*batch_size']
+    original_size: Shaped[ImageSizeType, '*batch_size time_c']
 
 
 """BBox Type"""
 BBoxCoordinateType = Float[torch.Tensor, 'objects xyxy=4']
-BBoxLabelType = UInt[torch.Tensor, 'objects']
+BBoxLabelType = Int[torch.Tensor, 'objects']
 BBoxProbabilityType = Float[torch.Tensor, 'objects']
 
 
-class BBoxComponentDict(TypedDict):
+class BBoxComponentDict(MetaComponentDict):
     """BBox component of a batch.
 
     coordinate: a xyxy array of bbox coordinates
@@ -57,7 +57,7 @@ class BBoxComponentDict(TypedDict):
     label: BBoxLabelType
 
 
-class BBoxBatchDict(TypedDict, total=False):
+class BBoxBatchDict(MetaBatchDict, total=False):
     coordinate: Shaped[BBoxCoordinateType, '*batch_size time_b']
     label: Shaped[BBoxLabelType, '*batch_size time_b']
     probability: Shaped[BBoxProbabilityType, 'batch_size time_b']
@@ -67,14 +67,16 @@ class BBoxBatchDict(TypedDict, total=False):
 
 
 class ComponentDict(TypedDict, total=False):
-    meta: MetaComponentDict
     image: ImageComponentDict
     bbox: BBoxComponentDict
 
 
 class BatchDict(TypedDict, total=False):
-    meta: MetaBatchDict
     image: ImageBatchDict
+    bbox: BBoxBatchDict
+
+
+class PredDict(TypedDict, total=False):
     bbox: BBoxBatchDict
 
 
@@ -84,3 +86,4 @@ class LossDict(TypedDict, total=False):
 
 class MetricDict(TypedDict, total=False):
     mAP: Float[torch.Tensor, '']
+    sAP: Float[torch.Tensor, '']

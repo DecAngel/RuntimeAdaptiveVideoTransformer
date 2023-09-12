@@ -11,6 +11,7 @@ import cv2
 from pycocotools.coco import COCO
 import torch.nn.functional as F
 import numpy as np
+import torch.multiprocessing as mp
 
 from ravt.protocols.structures import (
     BBoxComponentDict, ImageComponentDict, MetaComponentDict, ConfigTypes, InternalConfigs, ComponentTypes,
@@ -18,6 +19,26 @@ from ravt.protocols.structures import (
 )
 from ravt.protocols.classes import BaseDataset
 from ravt.utils.array_operations import clip_or_pad_along
+
+
+def torch_mp_cached_component(fn):
+    manager = mp.Manager()
+    cache = manager.dict()
+
+    @functools.wraps(fn)
+    def wrapper(self, subset: SubsetTypes, component: ComponentTypes, seq_id: int, frame_id: int):
+        nonlocal manager, cache
+        key = (seq_id, frame_id)
+        if key not in cache:
+            cache[key] = manager.dict(fn(self, subset, component, seq_id, frame_id))
+        return {**cache[key]}
+
+    def clear():
+        nonlocal cache
+        cache.clear()
+
+    wrapper.clear = clear
+    return wrapper
 
 
 class ArgoverseDataset(BaseDataset):
@@ -70,12 +91,15 @@ class ArgoverseDataset(BaseDataset):
             # images
             image_ids = []
             image_paths = []
+            image_sizes = []
             gt_coordinates = []
             gt_labels = []
             for seq_len, seq_dir, seq_start_img_id in self.sequence_frame.itertuples(index=False):
                 for image_id in range(seq_start_img_id, seq_start_img_id + seq_len):
                     image_ids.append(image_id)
-                    image_paths.append(str(seq_dir.joinpath(coco.loadImgs([image_id])[0]['name']).resolve()))
+                    image_ann = coco.loadImgs([image_id])[0]
+                    image_sizes.append((image_ann['height'], image_ann['width']))
+                    image_paths.append(str(seq_dir.joinpath(image_ann['name']).resolve()))
 
                     label_ids = coco.getAnnIds(imgIds=[image_id])
                     label_ann = coco.loadAnns(label_ids)
@@ -90,9 +114,18 @@ class ArgoverseDataset(BaseDataset):
                     gt_labels.append(cls)
             self.image_frame = pd.DataFrame({
                 'image_path': image_paths,
+                'image_size': image_sizes,
                 'gt_coordinate': pd.Series(gt_coordinates, dtype=object, index=image_ids),
                 'gt_label': pd.Series(gt_labels, dtype=object, index=image_ids),
             }, index=image_ids)
+
+            original_size = self.image_frame.iloc[0, 1]
+            resize_ratio = np.array(
+                [original_size[0]/self.size[0], original_size[1]/self.size[1]],
+                dtype=np.float32
+            )
+            self.original_size = torch.tensor(original_size, dtype=torch.int)
+            self.resize_ratio = resize_ratio[[1, 0, 1, 0]]
 
             # defaults
             self.default_coordinates = np.zeros((self.max_objs, 4), dtype=np.float32)
@@ -111,24 +144,24 @@ class ArgoverseDataset(BaseDataset):
 
         def get_image(self, seq_id: int, frame_id: int) -> ImageComponentDict:
             image_id = self.sequence_frame.iloc[seq_id, 2] + frame_id
-            image_path = self.image_frame.loc[image_id, 'image_path']
+            image_path, original_size, _, _ = self.image_frame.loc[image_id, :]
             image = cv2.imread(image_path)
-            original_size = image.shape[:2]
 
             image = torch.from_numpy(image)
-            image = image.permute(2, 0, 1)[None, ::-1, ...] / 255.0
+            image = image.permute(2, 0, 1)[None, [2, 1, 0], ...] / 255.0
             image = F.interpolate(image, self.size, mode='bilinear')[0]
 
-            resize_ratio = torch.tensor([original_size[0]/self.size[0], original_size[1]/self.size[1]], dtype=torch.float32)
-            return {
-                'image': image[0],
-                'resize_ratio': resize_ratio,
+            return {**self.get_meta(seq_id, frame_id)} | {
+                'image': image,
+                'original_size': self.original_size,
             }
 
         def get_bbox(self, seq_id: int, frame_id: int) -> BBoxComponentDict:
             image_id = self.sequence_frame.iloc[seq_id, 2] + frame_id
-            _, coordinate, label = self.image_frame.loc[image_id, :]
-            return {
+            _, _, coordinate, label = self.image_frame.loc[image_id, :]
+            coordinate /= self.resize_ratio
+
+            return {**self.get_meta(seq_id, frame_id)} | {
                 'coordinate': clip_or_pad_along(torch.from_numpy(coordinate), 0, self.max_objs),
                 'label': clip_or_pad_along(torch.from_numpy(label), 0, self.max_objs),
             }
@@ -173,10 +206,10 @@ class ArgoverseDataset(BaseDataset):
         else:
             raise ValueError(f'Unsupported subset {subset_type}')
 
-    def phase_init_impl(self, phase: ConfigTypes, configs: InternalConfigs) -> Optional[InternalConfigs]:
+    def phase_init_impl(self, phase: ConfigTypes, configs: InternalConfigs) -> InternalConfigs:
         if phase == 'dataset':
             self.hparams['dataset_dir'] = configs['environment']['dataset_dir']
-        return None
+        return configs
 
     def get_coco(self, subset: SubsetTypes) -> COCO:
         return self.subset(subset).get_coco()
@@ -184,9 +217,7 @@ class ArgoverseDataset(BaseDataset):
     def get_component(
             self, subset: SubsetTypes, component: ComponentTypes, seq_id: int, frame_id: int
     ) -> ComponentDict:
-        if component == 'meta':
-            return self.subset(subset).get_meta(seq_id, frame_id)
-        elif component == 'image':
+        if component == 'image':
             return self.subset(subset).get_image(seq_id, frame_id)
         elif component == 'bbox':
             return self.subset(subset).get_bbox(seq_id, frame_id)

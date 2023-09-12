@@ -472,9 +472,6 @@ class SwinTransformerBackbone(nn.Module):
             -1 means not freezing any parameters.
         use_checkpoint (bool): Whether to use checkpointing to save memory. Default: False.
     """
-    class OutputTypedDict(TypedDict):
-        features: Tuple[Float[torch.Tensor, 'batch_size channels height width'], ...]
-
     def __init__(self,
                  pretrain_img_size=224,
                  patch_size=4,
@@ -495,7 +492,8 @@ class SwinTransformerBackbone(nn.Module):
                  out_indices=(0, 1, 2, 3),
                  frozen_stages=-1,
                  use_checkpoint=False,
-                 **kwargs):
+                 **kwargs,
+                 ):
         super().__init__()
 
         self.pretrain_img_size = pretrain_img_size
@@ -553,6 +551,7 @@ class SwinTransformerBackbone(nn.Module):
             layer_name = f'norm{i_layer}'
             self.add_module(layer_name, layer)
 
+        self.init_weights()
         self._freeze_stages()
 
     def _freeze_stages(self):
@@ -593,8 +592,8 @@ class SwinTransformerBackbone(nn.Module):
 
     @typeguard.typechecked()
     def forward(
-            self, images: Float[torch.Tensor, 'batch_size channels_rgb=3 height width'], **kwargs
-    ) -> OutputTypedDict:
+            self, images: Float[torch.Tensor, 'batch_size channels_rgb=3 height width'],
+    ) -> Tuple[Float[torch.Tensor, 'batch_size channels height width'], ...]:
         """Forward function."""
         x = self.patch_embed(images)
 
@@ -619,7 +618,7 @@ class SwinTransformerBackbone(nn.Module):
                 out = x_out.view(-1, H, W, self.num_features[i]).permute(0, 3, 1, 2).contiguous()
                 outs.append(out)
 
-        return {'features': tuple(outs)}
+        return tuple(outs)
 
     def train(self, mode=True):
         """Convert the model into training mode while keep layers freezed."""
