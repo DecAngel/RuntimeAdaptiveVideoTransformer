@@ -6,12 +6,11 @@ import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 
-from ravt.protocols.classes import PhaseInitMixin
-from ravt.protocols.structures import PredDict, BatchDict, ConfigTypes, InternalConfigs
+from ravt.core.utils.phase_init import PhaseInitMixin
+from ravt.core.constants import PredDict, BatchDict, PhaseTypes, AllConfigs
 
 
 class VisualizeCallback(PhaseInitMixin, pl.Callback):
-    # TODO: save visualize file in sub directory
     def __init__(
             self,
             resize: Optional[Tuple[int, int]] = None,
@@ -30,12 +29,12 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
         self._trainer: Optional[pl.Trainer] = None
         self.visualize_dir = None
         self.visualize_count = 0
-        self.save_count = 0
+        self.stage = None
 
-    def phase_init_impl(self, phase: ConfigTypes, configs: InternalConfigs) -> InternalConfigs:
-        if phase == 'summary':
+    def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
+        if phase == 'visualization':
             self.visualize_dir = configs['environment']['output_visualize_dir']
-            self.save_count = len(list(self.visualize_dir.iterdir()))
+            self.stage = configs['internal']['stage']
         return configs
 
     def visualize(self, batch: BatchDict, pred: PredDict) -> np.ndarray:
@@ -53,9 +52,7 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
         else:
             pred_bbox_ids = []
 
-        all_ids = gt_image_ids + gt_bbox_ids + pred_bbox_ids
-        from_id = min(all_ids)
-        to_id = max(all_ids) + 1
+        all_ids = sorted(list(set(gt_image_ids + gt_bbox_ids + pred_bbox_ids)))
 
         vis_images = []
         gt_images = batch['image']['image'][0]
@@ -63,14 +60,15 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
             original_size = gt_images.shape[-2:]
             resize_ratio = np.array([self.resize[0]/original_size[0], self.resize[1]/original_size[1]])
             resize_ratio = resize_ratio[[1, 0, 1, 0]]
-            gt_images = F.interpolate(gt_images, size=self.resize)
+            with torch.inference_mode():
+                gt_images = F.interpolate(gt_images, size=self.resize)
         else:
             resize_ratio = np.ones((4, ), dtype=np.float)
 
-        gt_images = (gt_images*255).cpu().to(dtype=torch.uint8).permute(0, 2, 3, 1)[..., [2, 1, 0]].numpy()
+        gt_images = gt_images.cpu().permute(0, 2, 3, 1).numpy()
         blank_image = np.zeros_like(gt_images[0])
 
-        for i in range(from_id, to_id):
+        for i in all_ids:
             if i in gt_image_ids:
                 image = gt_images[gt_image_ids.index(i)]
             else:
@@ -86,6 +84,8 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
                         overlay = cv2.rectangle(overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()), (0, 255, 0), 2)
                     else:
                         break
+                mask = ((overlay[..., 1] == 0) * 255).astype(np.uint8)
+                image = np.bitwise_and(image, mask[..., None])
                 image = cv2.add(image, overlay)
 
             if i in pred_bbox_ids:
@@ -95,22 +95,35 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
                     pred['bbox']['label'][0, pred_bbox_ids.index(i)].cpu().numpy(),
                     pred['bbox']['probability'][0, pred_bbox_ids.index(i)].cpu().numpy(),
                 ):
-                    if np.sum(c) > 1e-5:
-                        overlay = cv2.rectangle(overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()), (0, 0, int(255*p.item())), 2)
+                    if np.sum(c) > 1e-1:
+                        overlay = cv2.rectangle(
+                            overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()),
+                            (0, 0, 255), 2
+                        )
                     else:
                         break
+                mask = ((overlay[..., 2] == 0) * 255).astype(np.uint8)
+                image = np.bitwise_and(image, mask[..., None])
                 image = cv2.add(image, overlay)
 
+            image = np.pad(image, ((50, 10), (5, 5), (0, 0)), constant_values=(0, 0))
+            image = cv2.putText(
+                image, f'Frame {i-all_ids[0]}', (0, 40), fontFace=cv2.FONT_HERSHEY_PLAIN,
+                fontScale=2.5, color=(255, 255, 255), thickness=2
+            )
             vis_images.append(image)
+
         return np.concatenate(vis_images, axis=1)
 
     def show(self, batch: BatchDict, pred: PredDict) -> None:
         cv2.imshow('visualize', self.visualize(batch, pred))
+        cv2.waitKey(1)
 
     def save(self, batch: BatchDict, pred: PredDict) -> None:
         vis_image = self.visualize(batch, pred)
-        cv2.imwrite(str(self.visualize_dir.joinpath(f'{self.save_count:05}.jpg')), vis_image)
-        self.save_count += 1
+        seq_id = batch['image']['seq_id'][0, 0].cpu().numpy().item()
+        frame_id = batch['image']['frame_id'][0, 0].cpu().numpy().item()
+        cv2.imwrite(str(self.visualize_dir.joinpath(f'{self.stage}_{seq_id:03d}_{frame_id:03d}.jpg')), vis_image)
 
     def tensorboard(self, batch: BatchDict, pred: PredDict) -> None:
         raise NotImplementedError()
@@ -148,7 +161,7 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
         dataloader_idx: int = 0,
     ) -> None:
         if self.visualize_eval != 0 and not self._trainer.sanity_checking:
-            self.save(batch, outputs)
+            self.execute(batch, outputs)
             if self.visualize_count >= self.visualize_eval:
                 self.visualize_count = 0
 
@@ -162,6 +175,6 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
         dataloader_idx: int = 0,
     ) -> None:
         if self.visualize_test != 0 and not self._trainer.sanity_checking:
-            self.save(batch, outputs)
+            self.execute(batch, outputs)
             if self.visualize_count >= self.visualize_test:
                 self.visualize_count = 0

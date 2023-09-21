@@ -7,7 +7,7 @@ from pytorch_lightning import Callback
 from timm.utils.model import get_state_dict, unwrap_model
 from torch import nn
 
-from ravt.utils.lightning_logger import ravt_logger as logger
+from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
 class ModelEmaV2(nn.Module):

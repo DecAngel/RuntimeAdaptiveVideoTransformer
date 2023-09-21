@@ -15,6 +15,14 @@ python -m pip install pytorch-lightning
 ```shell
 python -m pip install opencv-python timm imgaug kornia kornia-rs
 ```
+- install dataset server libs
+```shell
+python -m pip install flask
+```
+- install cli libs
+```shell
+python -m pip install fire
+```
 - install evaluation libs
 ```shell
 python -m pip install pycocotools tensorboard sap_toolkit
