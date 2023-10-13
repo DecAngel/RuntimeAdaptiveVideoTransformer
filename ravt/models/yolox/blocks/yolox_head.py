@@ -1,14 +1,13 @@
 import math
 import functools
-from typing import Optional, Tuple, TypedDict, Union
+from typing import Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import typeguard
 import torchvision
-from jaxtyping import Float, Int
 
+from .types import YOLOXPredDict, YOLOXLossDict, PYRAMID, COORDINATE, LABEL
 from .network_blocks import BaseConv, DWConv
 from .iou_loss import IOUloss
 from ravt.core.utils.array_operations import xyxy2cxcywh, clip_or_pad_along
@@ -100,14 +99,6 @@ def yolox_postprocess(prediction, num_classes, conf_thre=0.7, nms_thre=0.45, cla
 
 
 class YOLOXHead(nn.Module):
-    class OutputPredTypedDict(TypedDict):
-        pred_coordinates: Float[torch.Tensor, 'batch_size max_objs coords_xyxy=4']
-        pred_probabilities: Float[torch.Tensor, 'batch_size max_objs']
-        pred_labels: Int[torch.Tensor, 'batch_size max_objs']
-
-    class OutputLossTypedDict(TypedDict):
-        loss: Float[torch.Tensor, '']
-
     def __init__(
         self,
         num_classes: int = 8,
@@ -217,7 +208,7 @@ class YOLOXHead(nn.Module):
                 )
             )
 
-        self.use_l1 = False
+        self.use_l1 = True
         self.l1_loss = nn.L1Loss(reduction="none")
         self.bcewithlog_loss = nn.BCEWithLogitsLoss(reduction="none")
         self.iou_loss = IOUloss(reduction="none")
@@ -235,14 +226,13 @@ class YOLOXHead(nn.Module):
             b.data.fill_(-math.log((1 - prior_prob) / prior_prob))
             conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
-    @typeguard.typechecked()
     def forward(
             self,
-            features: Tuple[Float[torch.Tensor, 'batch_size channels height width'], ...],
-            gt_coordinates: Optional[Float[torch.Tensor, 'batch_size max_objs coords_xyxy=4']] = None,
-            gt_labels: Optional[Int[torch.Tensor, 'batch_size max_objs']] = None,
+            features: PYRAMID,
+            gt_coordinates: Optional[COORDINATE] = None,
+            gt_labels: Optional[LABEL] = None,
             shape: Optional[Tuple[int, int]] = (600, 960),
-    ) -> Union[OutputPredTypedDict, OutputLossTypedDict]:
+    ) -> Union[YOLOXPredDict, YOLOXLossDict]:
         if self.training:
             loss, iou_loss, conf_loss, cls_loss, l1_loss, num_fg = self.forward_impl(
                 features, torch.cat([

@@ -1,0 +1,16 @@
+# --index-url https://pypi.python.org/simple
+--index-url https://pypi.tuna.tsinghua.edu.cn/simple
+pytorch-lightning
+positional_encodings
+pandas
+opencv-python
+timm
+kornia
+kornia-rs
+websockets
+fire
+pycocotools
+tensorboard
+sap_toolkit
+typeguard==3.0.2
+jaxtyping

@@ -9,9 +9,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 import math
-import typeguard
-from jaxtyping import Float, Int
 
+from .types import YOLOXPredDict, YOLOXLossDict, PYRAMID, COORDINATE, LABEL
 from .network_blocks import BaseConv, DWConv
 from .iou_loss import IOUloss
 from .yolox_head import bboxes_iou, yolox_postprocess, clip_or_pad_along
@@ -20,14 +19,6 @@ from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
 class TALHead(nn.Module):
-    class OutputPredTypedDict(TypedDict):
-        pred_coordinates: Float[torch.Tensor, 'batch_size max_objs coords_xyxy=4']
-        pred_probabilities: Float[torch.Tensor, 'batch_size max_objs']
-        pred_labels: Int[torch.Tensor, 'batch_size max_objs']
-
-    class OutputLossTypedDict(TypedDict):
-        loss: Float[torch.Tensor, '']
-
     def __init__(
         self,
         num_classes: int = 8,
@@ -165,14 +156,13 @@ class TALHead(nn.Module):
             b.data.fill_(-math.log((1 - prior_prob) / prior_prob))
             conv.bias = torch.nn.Parameter(b.view(-1), requires_grad=True)
 
-    @typeguard.typechecked()
     def forward(
             self,
-            features: List[torch.Tensor],
-            gt_coordinates: Optional[Float[torch.Tensor, 'batch_size t=2 max_objs coords_xyxy=4']] = None,
-            gt_labels: Optional[Int[torch.Tensor, 'batch_size t=2 max_objs']] = None,
-            shape: Optional[Tuple[int, int]] = (600, 960)
-    ) -> Union[OutputPredTypedDict, OutputLossTypedDict]:
+            features: PYRAMID,
+            gt_coordinates: Optional[COORDINATE] = None,
+            gt_labels: Optional[LABEL] = None,
+            shape: Optional[Tuple[int, int]] = (600, 960),
+    ) -> Union[YOLOXPredDict, YOLOXLossDict]:
         if self.training:
             g1c, g2c = gt_coordinates.unbind(1)
             g1l, g2l = gt_labels.unbind(1)

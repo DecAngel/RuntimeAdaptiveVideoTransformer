@@ -13,10 +13,6 @@ class EnvironmentConfigs(TypedDict, total=False):
     output_visualize_dir: Path
     output_train_log_dir: Path
     output_sap_log_dir: Path
-    weight_dir: Path
-    weight_benchmark_dir: Path
-    weight_pretrained_dir: Path
-    weight_trained_dir: Path
     dataset_dir: Path
 
     tensorboard_port: int

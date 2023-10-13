@@ -1,4 +1,4 @@
-from typing import Tuple
+from typing import Tuple, Literal
 
 import torch
 import torch.nn as nn
@@ -6,11 +6,12 @@ import torch.nn.functional as F
 import typeguard
 from timm.models.layers import to_2tuple, trunc_normal_
 from jaxtyping import Float
+from positional_encodings.torch_encodings import PositionalEncoding1D
 
-from .swin_transformer_backbone import PatchEmbed, BasicLayer, PatchMerging
+from .swin_transformer_backbone import PatchEmbed, BasicLayer, PatchMerging, Mlp
 
 
-class SwinTransformerBackbone3D(nn.Module):
+class RAVTBackbone(nn.Module):
     """ Swin Transformer backbone.
         A PyTorch impl of : `Swin Transformer: Hierarchical Vision Transformer using Shifted Windows`  -
           https://arxiv.org/pdf/2103.14030
@@ -58,6 +59,10 @@ class SwinTransformerBackbone3D(nn.Module):
                  out_indices=(0, 1, 2, 3),
                  frozen_stages=-1,
                  use_checkpoint=False,
+
+                 neck_type: Literal['t1'] = 't1',
+                 neck_temporal_frame: Tuple[int, ...] = (1, ),
+
                  **kwargs,
                  ):
         super().__init__()
@@ -117,16 +122,28 @@ class SwinTransformerBackbone3D(nn.Module):
             layer_name = f'norm{i_layer}'
             self.add_module(layer_name, layer)
 
-        self.temporal = nn.ModuleList([
-            nn.MultiheadAttention(
-                embed_dim=f,
-                num_heads=h,
-                dropout=drop_rate,
-                bias=qkv_bias,
-                add_bias_kv=qkv_bias,
-                batch_first=True,
-            ) for f, h in zip(self.num_features, num_heads)
-        ])
+        self.neck_type = neck_type
+        self.neck_temporal_frame = neck_temporal_frame
+        if self.neck_type == 't1':
+            self.temporal_pe = nn.ModuleList([
+                PositionalEncoding1D(f) for f in self.num_features
+            ])
+            self.temporal_pool = nn.AdaptiveAvgPool2d()
+            self.temporal_a = nn.ModuleList([
+                nn.MultiheadAttention(
+                    embed_dim=f,
+                    num_heads=h,
+                    dropout=attn_drop_rate,
+                    bias=qkv_bias,
+                    add_bias_kv=qkv_bias,
+                    batch_first=True,
+                ) for f, h in zip(self.num_features, num_heads)
+            ])
+            self.temporal_mlp = nn.ModuleList([
+                Mlp(f, drop=drop_rate) for f in self.num_features
+            ])
+        else:
+            raise ValueError(f'Unsupported neck_type: {neck_type}')
 
         self.init_weights()
         self._freeze_stages()
@@ -169,8 +186,8 @@ class SwinTransformerBackbone3D(nn.Module):
 
     @typeguard.typechecked()
     def forward(
-            self, images: Float[torch.Tensor, 'batch_size time channels_rgb=3 height width'],
-    ) -> Tuple[Float[torch.Tensor, 'batch_size channels height width'], ...]:
+            self, images: Float[torch.Tensor, 'batch_size time_in channels_rgb=3 height width'],
+    ) -> Tuple[Float[torch.Tensor, 'batch_size time_out channels height width'], ...]:
         """Forward function."""
         B, T, _, _, _ = images.size()
         x = images.flatten(0, 1)
@@ -185,27 +202,40 @@ class SwinTransformerBackbone3D(nn.Module):
             x = x.flatten(2).transpose(1, 2)
         x = self.pos_drop(x)
 
-        outs = []
-        for i in range(self.num_layers):
-            layer = self.layers[i]
-            x_out, H, W, x, Wh, Ww = layer(x, Wh, Ww)
+        if self.neck_type == 't1':
+            outs = []
+            for i in range(self.num_layers):
+                layer = self.layers[i]
+                x_out, H, W, x, Wh, Ww = layer(x, Wh, Ww)
 
-            if i in self.out_indices:
-                _, L, C = x_out.size()
-                x_out = x_out.reshape(B, T, L, C).permute(0, 2, 1, 3).flatten(0, 1)
-                at_out, at_weight = self.temporal[i](x_out, x_out, x_out)
-                x_out = at_out[:, -1, :]
-                x_out = x_out.reshape(B, L, C)
+                if i in self.out_indices:
+                    norm_layer = getattr(self, f'norm{i}')
 
-                norm_layer = getattr(self, f'norm{i}')
-                x_out = norm_layer(x_out)
+                    _, L, C = x_out.size()
+                    x_out = x_out.reshape(B, T, L, C)
 
-                out = x_out.view(-1, H, W, self.num_features[i]).permute(0, 3, 1, 2).contiguous()
-                outs.append(out)
+                    x_t = torch.mean(x_out, dim=2)
+                    x_t = x_t + self.temporal_pe[i](x_t).flip(1)  # last t is current t
+                    x_t1 = norm_layer(x_t)
+                    x_t1, weight1 = self.temporal_a[i](x_t1, x_t1, x_t1)
+                    x_t = x_t + x_t1
+                    x_t2 = norm_layer(x_t)
+                    x_t2 = self.temporal_mlp[i](x_t2)
+                    x_t = x_t + x_t2
 
-        return tuple(outs)
+                    x_t = x_t[:, self.neck_temporal_frame, None]
+                    x_out = x_out[:, self.neck_temporal_frame]
+                    x_out = x_out + x_t
+
+                    x_out = norm_layer(x_out)
+                    out = x_out.view(B, len(self.neck_temporal_frame), H, W, self.num_features[i]).permute(0, 1, 4, 2, 3).contiguous()
+                    outs.append(out)
+
+            return tuple(outs)
+        else:
+            raise ValueError(f'Unsupported neck_type: {self.neck_type}')
 
     def train(self, mode=True):
         """Convert the model into training mode while keep layers freezed."""
-        super(SwinTransformerBackbone3D, self).train(mode)
+        super(RAVTBackbone, self).train(mode)
         self._freeze_stages()

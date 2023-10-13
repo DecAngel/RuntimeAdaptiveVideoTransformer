@@ -38,11 +38,14 @@ class COCOEvalMAPMetric(BaseMetric):
             dist_sync_on_step=False,
             process_group=None,
             dist_sync_fn=None,
+            compute_on_cpu=True,
         )
         self.coco: Optional[COCO] = None
         self.available: bool = False
-        self.seq_first_ids: Optional[Dict[int, int]] = None
-        self.add_state('predict_list', default=[], dist_reduce_fx='cat')
+        self.add_state('image_id_list', default=[], dist_reduce_fx='cat')
+        self.add_state('category_id_list', default=[], dist_reduce_fx='cat')
+        self.add_state('bbox_list', default=[], dist_reduce_fx='cat')
+        self.add_state('score_list', default=[], dist_reduce_fx='cat')
 
     def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
         if phase == 'evaluation':
@@ -71,36 +74,39 @@ class COCOEvalMAPMetric(BaseMetric):
         current_size = torch.tensor(batch['image']['image'].shape[-2:], dtype=torch.float32, device=self.device)
         r = (original_size / current_size)[..., [1, 0, 1, 0]]
 
-        pred_coordinates = xyxy2xywh(r*pred['bbox']['coordinate']).cpu().numpy()
-        pred_labels = pred['bbox']['label'].cpu().numpy()
-        pred_probabilities = pred['bbox']['probability'].cpu().numpy()
-        image_ids = pred['bbox']['image_id'].cpu().numpy()
-
-        for b in range(image_ids.shape[0]):
-            for t in range(image_ids.shape[1]):
-                i = image_ids[b, t].item()
-                for c, l, p in zip(
-                        pred_coordinates[b, t].tolist(),
-                        pred_labels[b, t].tolist(),
-                        pred_probabilities[b, t].tolist(),
-                ):
-                    if abs(p) > 1e-5:
-                        self.predict_list.append({
-                            'image_id': i,
-                            'category_id': l,
-                            'bbox': c,
-                            'score': p,
-                            'segmentation': [],
-                        })
+        self.image_id_list.extend(pred['bbox']['image_id'].cpu().flatten(0, 1).unbind(0))
+        self.category_id_list.extend(pred['bbox']['label'].cpu().flatten(0, 1).unbind(0))
+        self.bbox_list.extend(xyxy2xywh(r*pred['bbox']['coordinate']).cpu().flatten(0, 1).unbind(0))
+        self.score_list.extend(pred['bbox']['probability'].cpu().flatten(0, 1).unbind(0))
 
     def compute(self) -> MetricDict:
         # gt, outputs
         assert self.available
         cocoGt = self.coco
-        outputs = sorted(self.predict_list, key=lambda x: x['image_id'])
+
+        # construct outputs
+        outputs = []
+        for i, c, b, p in zip(
+            self.image_id_list,
+            self.category_id_list,
+            self.bbox_list,
+            self.score_list,
+        ):
+            i = i.numpy().item()
+            for _c, _b, _p in zip(c.numpy(), b.numpy(), p.numpy()):
+                if _p > 1e-5:
+                    outputs.append({
+                        'image_id': i,
+                        'category_id': _c.item(),
+                        'bbox': _b.tolist(),
+                        'score': _p.item(),
+                        'segmentation': [],
+                    })
 
         if len(outputs) == 0:
             return {'mAP': torch.tensor(0.0, dtype=torch.float32, device=self.device)}
+        else:
+            outputs = sorted(outputs, key=lambda x: x['image_id'])
 
         res_str = io.StringIO()
         with contextlib.redirect_stdout(res_str):

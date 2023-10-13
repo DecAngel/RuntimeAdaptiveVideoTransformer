@@ -5,7 +5,7 @@ import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch import nn
 
-from .blocks import YOLOXPAFPNBackbone, DFP, DFPMIN, TALHead, StreamYOLOScheduler
+from .blocks import YOLOXPAFPNBackbone, MSCANeck, TALHead, StreamYOLOScheduler, SimpleNeck, MSCAScheduler, Simple2Neck
 from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 from ravt.core.constants import (
@@ -15,7 +15,7 @@ from ravt.core.base_classes import BaseSystem
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
-class StreamYOLOSystem(BaseSystem):
+class MSCASystem(BaseSystem):
     def __init__(
             self,
             # structural parameters
@@ -28,7 +28,7 @@ class StreamYOLOSystem(BaseSystem):
             act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
             num_classes: int = 8,
             max_objs: int = 100,
-            neck_type: Literal['dfp', 'dfpmin'] = 'dfp',
+            neck_type: Literal['mscta', 'simple', 'simple2'] = 'mscta',
 
             # predict parameters
             predict_num: int = 1,
@@ -81,10 +81,12 @@ class StreamYOLOSystem(BaseSystem):
         self.save_hyperparameters(ignore=['kwargs'])
 
         self.backbone = YOLOXPAFPNBackbone(**self.hparams)
-        if neck_type == 'dfp':
-            self.neck = DFP(**self.hparams)
-        elif neck_type == 'dfpmin':
-            self.neck = DFPMIN(**self.hparams)
+        if neck_type == 'mscta':
+            self.neck = MSCANeck(in_channels)
+        elif neck_type == 'simple':
+            self.neck = SimpleNeck(in_channels, time_constant=[1])
+        elif neck_type == 'simple2':
+            self.neck = Simple2Neck(in_channels, [-self.hparams.predict_num], [self.hparams.predict_num])
         else:
             raise ValueError(f'Unsupported neck_type: {neck_type}')
         self.head = TALHead(**self.hparams)
@@ -100,30 +102,34 @@ class StreamYOLOSystem(BaseSystem):
 
     @property
     def example_input_array(self) -> Tuple[BatchDict]:
+        b = 2
+        p = self.hparams.predict_num + 1
         return {
             'image': {
-                'image_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
-                'seq_id': torch.ones(4, 2, dtype=torch.int32),
-                'frame_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
-                'image': torch.zeros(4, 2, 3, 600, 960, dtype=torch.uint8),
-                'original_size': torch.ones(4, 2, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
+                'image_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
+                'seq_id': torch.ones(b, p, dtype=torch.int32),
+                'frame_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
+                # 'image': torch.randint(0, 255, (b, p, 3, 600, 960), dtype=torch.uint8),
+                'image': torch.randint(0, 255, (b, p, 3, 600, 960), dtype=torch.uint8),
+                'original_size': torch.ones(b, p, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
             'bbox': {
-                'image_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
-                'seq_id': torch.ones(4, 2, dtype=torch.int32),
-                'frame_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
-                'coordinate': torch.zeros(4, 2, 100, 4, dtype=torch.float32),
-                'label': torch.zeros(4, 2, 100, dtype=torch.int32),
-                'probability': torch.zeros(4, 2, 100, dtype=torch.float32),
+                'image_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
+                'seq_id': torch.ones(b, p, dtype=torch.int32),
+                'frame_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
+                'coordinate': torch.zeros(b, p, 100, 4, dtype=torch.float32),
+                'label': torch.zeros(b, p, 100, dtype=torch.int32),
+                'probability': torch.zeros(b, p, 100, dtype=torch.float32),
             }
         },
 
     @property
     def required_keys_train(self) -> BatchKeys:
+        p = self.hparams.predict_num
         return {
             'interval': 1,
-            'margin': self.hparams.predict_num*2,
-            'image': [0, self.hparams.predict_num],
+            'margin': p*2,
+            'image': list(range(0, p+1)),
             'bbox': [self.hparams.predict_num, self.hparams.predict_num*2],
         }
 
@@ -175,7 +181,7 @@ class StreamYOLOSystem(BaseSystem):
 
         image_0, image_p = images.unbind(1)
         feature_0, feature_p = self.backbone(image_0), self.backbone(image_p)
-        feature_2p = self.neck((feature_0, feature_p))
+        feature_2p = self.neck(tuple(torch.stack([f0, fp], dim=1) for f0, fp in zip(feature_0, feature_p)))
         if self.training:
             loss_dict = self.head(
                 feature_2p,
@@ -209,12 +215,12 @@ class StreamYOLOSystem(BaseSystem):
         optimizer = torch.optim.SGD(p_norm, lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True)
         optimizer.add_param_group({"params": p_weight, "weight_decay": self.hparams.weight_decay})
         optimizer.add_param_group({"params": p_bias})
-        scheduler = StreamYOLOScheduler(optimizer, int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs))
+        scheduler = MSCAScheduler(optimizer, int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs))
 
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
 
-def streamyolo_s(
+def msca_s(
         predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 1,
@@ -225,15 +231,15 @@ def streamyolo_s(
         depthwise: bool = False,
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
-        neck_type: Literal['dfp', 'dfpmin'] = 'dfp',
+        neck_type: Literal['mscta', 'simple', 'simple2'] = 'mscta',
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
         lr: float = 0.001,
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
         **kwargs
-) -> StreamYOLOSystem:
-    return StreamYOLOSystem(
+) -> MSCASystem:
+    return MSCASystem(
         num_classes=num_classes,
         predict_num=predict_num,
         base_depth=base_depth,

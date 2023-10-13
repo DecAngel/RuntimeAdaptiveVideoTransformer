@@ -3,36 +3,22 @@
 ## Installation
 - install python=3.9
 - setup virtual environment with conda or virtualenv
-- install pytorch=2.0
+- install pytorch (examine your cuda version and modify [requirements_pytorch.txt](requirements_pytorch.txt))
 ```shell
-conda install pytorch torchvision torchaudio pytorch-cuda=11.7 -c pytorch -c nvidia
+python -m pip install -r requirements_pytorch.txt
 ```
-- install pytorch-lightning
+- install other dependencies (modify [requirements_others.txt](requirements_others.txt))
 ```shell
-python -m pip install pytorch-lightning
+python -m pip install -r requirements_others.txt
 ```
-- install image libs
+- create dataset link
 ```shell
-python -m pip install opencv-python timm imgaug kornia kornia-rs
+cd <ravt dir>
+ln -s <your dataset path> ./datasets
 ```
-- install dataset server libs
-```shell
-python -m pip install flask
-```
-- install cli libs
-```shell
-python -m pip install fire
-```
-- install evaluation libs
-```shell
-python -m pip install pycocotools tensorboard sap_toolkit
-```
-- install typeguard libs
-```shell
-python -m pip install typeguard==3.0.2 jaxtyping
-```
-
 
 ## TODO
-- [ ] implement 3d attention
-- [ ] fix phase init call multiple times 
+- [x] implement 3d attention
+- [x] fix phase init call multiple times 
+- [x] fix random resize
+- [ ] fix ema saving & loading

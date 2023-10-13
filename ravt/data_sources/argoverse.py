@@ -88,6 +88,16 @@ class ArgoverseDataSource(BaseDataSource):
                         bbox = np.array([l['bbox'] for l in label_ann], dtype=np.float32)
                         cls = np.array([class_ids.index(l['category_id']) for l in label_ann], dtype=np.int32)
                         bbox[:, 2:] += bbox[:, :2]
+
+                        # clip bbox & filter small bbox
+                        bbox[:, [0, 2]] = np.clip(bbox[:, [0, 2]], a_min=0, a_max=image_ann['width'])
+                        bbox[:, [1, 3]] = np.clip(bbox[:, [1, 3]], a_min=0, a_max=image_ann['height'])
+                        mask = np.min(bbox[:, 2:] - bbox[:, :2], axis=1) >= 2
+                        if not np.all(mask):
+                            logger.warning(f'filtered {bbox[np.logical_not(mask)]}!')
+
+                        bbox = bbox[mask]
+                        cls = cls[mask]
                     else:
                         bbox = np.zeros((0, 4), dtype=np.float32)
                         cls = np.zeros((0,), dtype=np.int32)
@@ -115,14 +125,19 @@ class ArgoverseDataSource(BaseDataSource):
             if self.sm_client is not None:
                 if self.sm_client.test_connection():
                     B, C, H, W = sum(self.get_length()), 3, self.size[0], self.size[1]
-                    self.cache = self.sm_client.request_shared_memory(
-                        f'argoverse_{ann_file.name}_image', dtype=np.uint8, shape_tuple=(B, C, H, W)
-                    )
-                    self.cache_bool = self.sm_client.request_shared_memory(
-                        f'argoverse_{ann_file.name}_bool', dtype=bool, shape_tuple=(B, )
-                    )
+                    try:
+                        self.cache = self.sm_client.request_shared_memory(
+                            f'argoverse_{ann_file.name}_image', dtype=np.uint8, shape_tuple=(B, C, H, W)
+                        )
+                        self.cache_bool = self.sm_client.request_shared_memory(
+                            f'argoverse_{ann_file.name}_bool', dtype=bool, shape_tuple=(B, )
+                        )
+                    except RuntimeError:
+                        logger.warning('Shm allocation failed, falling back to normal loading')
+                        self.sm_client = None
                 else:
-                    raise ConnectionRefusedError(f'Cannot connect to port {self.sm_client.port}')
+                    logger.warning('Shm server connection failed, falling back to normal loading')
+                    self.sm_client = None
 
         def get_coco(self):
             with contextlib.redirect_stdout(io.StringIO()):
@@ -196,11 +211,11 @@ class ArgoverseDataSource(BaseDataSource):
 
     @functools.cached_property
     def ann_train_file(self):
-        return self.ann_dir.joinpath('train_1.json')
+        return self.ann_dir.joinpath('train.json')
 
     @functools.cached_property
     def ann_eval_file(self):
-        return self.ann_dir.joinpath('train_2.json')
+        return self.ann_dir.joinpath('val.json')
 
     @functools.cached_property
     def ann_test_file(self):
@@ -222,7 +237,7 @@ class ArgoverseDataSource(BaseDataSource):
                 self.ann_eval_file,
                 self.size,
                 self.max_objs,
-                # self.client,
+                self.client,
             )
         elif subset_type == 'test':
             return ArgoverseDataSource.Subset(
@@ -230,7 +245,7 @@ class ArgoverseDataSource(BaseDataSource):
                 self.ann_test_file,
                 self.size,
                 self.max_objs,
-                # self.client,
+                self.client,
             )
         else:
             raise ValueError(f'Unsupported subset {subset_type}')

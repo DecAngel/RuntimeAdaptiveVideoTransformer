@@ -1,9 +1,10 @@
-from typing import List, Tuple
+from typing import Tuple
 
 import torch
 from torch import nn
 
 from .network_blocks import BaseConv
+from .types import PYRAMID
 
 
 class DFPMIN(nn.Module):
@@ -18,9 +19,9 @@ class DFPMIN(nn.Module):
             for f in in_channels
         ])
 
-    def forward(self, features: Tuple[List[torch.Tensor], List[torch.Tensor]]) -> List[torch.Tensor]:
+    def forward(self, features: Tuple[PYRAMID, PYRAMID]) -> PYRAMID:
         f0, f1 = features
         f2 = []
         for i in range(len(f0)):
             f2.append(f1[i] + self.convs[i](f1[i]) - self.convs[i](f0[i]))
-        return f2
+        return tuple(f2)

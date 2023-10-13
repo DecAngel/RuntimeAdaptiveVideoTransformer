@@ -1,13 +1,12 @@
-from pathlib import Path
-from typing import Optional, Union, Dict, Tuple, Callable
+from typing import Optional, Union, Dict, Tuple
 
 import torch
+import torch.nn as nn
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import StepLR
 
-from .blocks import SwinTransformerBackbone, YOLOXHead
+from .blocks import SwinTransformerBackbone, YOLOXHead, SwinScheduler, StreamYOLOScheduler
 from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 from ravt.core.constants import (
@@ -27,6 +26,8 @@ class SwinTransformerSystem(BaseSystem):
             window_size: int = 7,
             pretrain_img_size: Tuple[int, int] = (600, 960),
             ape: bool = False,
+            drop_rate: float = 0.,
+            attn_drop_rate: float = 0.,
             drop_path_rate: float = 0.2,
             patch_norm: bool = True,
             use_checkpoint: bool = False,
@@ -37,9 +38,6 @@ class SwinTransformerSystem(BaseSystem):
             strides: Tuple[int, ...] = (4, 8, 16, 32),
             in_channels: Tuple[int, ...] = (96, 192, 384, 768),
             mid_channel: int = 128,
-
-            # pretrain parameters
-            pretrain_adapter: Optional[Callable[[Path], Dict]] = None,
 
             # predict parameters
             predict_num: int = 0,
@@ -53,15 +51,22 @@ class SwinTransformerSystem(BaseSystem):
             nms_thre: float = 0.65,
 
             # learning rate parameters
-            lr: float = 0.001,
-            gamma: float = 0.99,
+            swin_lr: float = 0.0001,
+            swin_weight_decay: float = 0.05,
+            yolox_lr: float = 0.001,
+            yolox_momentum: float = 0.9,
+            yolox_weight_decay: float = 5e-4,
+
             **kwargs,
     ):
         super().__init__(
-            pretrain_adapter=pretrain_adapter,
             preprocess=KorniaAugmentation(
                 train_aug=ka.VideoSequential(ka.RandomHorizontalFlip()),
                 train_resize=ka.VideoSequential(
+                    # *[nn.Sequential(
+                    #     ka.Resize((h, w)), ka.Normalize(mean=list(norm_mean), std=list(norm_std))
+                    # ) for h, w in zip(range(540, 661, 10), range(864, 1057, 16))],
+                    # random_apply=1,
                     ka.Resize((600, 960)),
                     ka.Normalize(mean=list(norm_mean), std=list(norm_std)),
                 ),
@@ -73,12 +78,20 @@ class SwinTransformerSystem(BaseSystem):
             ),
             metric=COCOEvalMAPMetric(),
         )
-        self.save_hyperparameters(ignore=['kwargs', 'pretrain_adapter'])
+        self.save_hyperparameters(ignore=['kwargs'])
 
         self.backbone = SwinTransformerBackbone(**self.hparams)
         self.head = YOLOXHead(**self.hparams)
         self.register_buffer('c255', tensor=torch.tensor(255.0, dtype=torch.float32), persistent=False)
         self.register_buffer('cp', tensor=torch.tensor(self.hparams.predict_num, dtype=torch.int32), persistent=False)
+
+        def init_yolo(M):
+            for m in M.modules():
+                if isinstance(m, torch.nn.BatchNorm2d):
+                    m.eps = 1e-3
+                    m.momentum = 0.03
+
+        self.head.apply(init_yolo)
 
     @property
     def example_input_array(self) -> Tuple[BatchDict]:
@@ -115,7 +128,7 @@ class SwinTransformerSystem(BaseSystem):
             'interval': 1,
             'margin': self.hparams.predict_num,
             'image': [0],
-            'bbox': [self.hparams.predict_num],
+            # 'bbox': [self.hparams.predict_num],
         }
 
     @property
@@ -125,6 +138,19 @@ class SwinTransformerSystem(BaseSystem):
             'margin': self.hparams.predict_num,
             'bbox': [self.hparams.predict_num],
         }
+
+    def pth_adapter(self, state_dict: Dict) -> Dict:
+        s = self.state_dict()
+        new_ckpt = {}
+        shape_mismatches = []
+        for k, v in state_dict['state_dict'].items():
+            if k in s and s[k].shape != v.shape:
+                shape_mismatches.append(k)
+            else:
+                new_ckpt[k] = v
+        if len(shape_mismatches) > 0:
+            logger.warning(f'Ignoring params with mismatched shape: {shape_mismatches}')
+        return new_ckpt
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
         images: Float[torch.Tensor, 'B Ti C H W'] = batch['image']['image'] / self.c255
@@ -160,13 +186,57 @@ class SwinTransformerSystem(BaseSystem):
             }
 
     def configure_optimizers(self):
-        optimizer = AdamW(self.parameters(), lr=self.hparams.lr, betas=(0.9, 0.999), weight_decay=0.05)
-        scheduler = StepLR(optimizer, 1, gamma=self.hparams.gamma)
-        return [optimizer], [scheduler]
+        epoch_steps = int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs)
+
+        # swin optimization
+        p_swin_1, p_swin_2 = [], []
+        for k, v in self.named_modules():
+            if (
+                'absolute_pos_embed' in k or
+                'relative_position_bias_table' in k or
+                'norm' in k
+            ):
+                p_swin_2.extend(v.parameters(recurse=False))
+            else:
+                p_swin_1.extend(v.parameters(recurse=False))
+        optimizer_swin = AdamW(
+            p_swin_1, lr=self.hparams.swin_lr, betas=(0.9, 0.999), weight_decay=self.hparams.swin_weight_decay
+        )
+        optimizer_swin.add_param_group({"params": p_swin_2, "weight_decay": 0.0})
+        scheduler_swin = SwinScheduler(optimizer_swin, epoch_steps)
+
+        # yolox optimization
+        """
+        p_yolox_bias, p_yolox_norm, p_yolox_weight = [], [], []
+        for k, v in self.head.named_modules():
+            if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+                p_yolox_bias.append(v.bias)
+            if isinstance(v, nn.BatchNorm2d) or 'bn' in k:
+                p_yolox_norm.append(v.weight)
+            elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
+                p_yolox_weight.append(v.weight)  # apply decay
+        optimizer_yolox = torch.optim.SGD(p_yolox_norm, lr=self.hparams.yolox_lr, momentum=self.hparams.yolox_momentum, nesterov=True)
+        optimizer_yolox.add_param_group({"params": p_yolox_weight, "weight_decay": self.hparams.yolox_weight_decay})
+        optimizer_yolox.add_param_group({"params": p_yolox_bias})
+        scheduler_yolox = StreamYOLOScheduler(optimizer_yolox, epoch_steps)
+        
+        return (
+            [optimizer_swin, optimizer_yolox],
+            [
+                {'scheduler': scheduler_swin, 'interval': 'step', 'name': 'Swin_lr'},
+                {'scheduler': scheduler_yolox, 'interval': 'step', 'name': 'YOLOX_lr'},
+            ]
+        )
+        """
+        return (
+            [optimizer_swin],
+            [
+                {'scheduler': scheduler_swin, 'interval': 'step', 'name': 'Swin_lr'},
+            ]
+        )
 
 
 def swin_transformer_small_patch4_window7(
-        pretrained: bool = True,
         num_classes: int = 8,
         predict_num: int = 0,
         embed_dim: int = 96,
@@ -175,6 +245,8 @@ def swin_transformer_small_patch4_window7(
         window_size: int = 7,
         pretrain_img_size: Tuple[int, int] = (600, 960),
         ape: bool = False,
+        drop_rate: float = 0.,
+        attn_drop_rate: float = 0.,
         drop_path_rate: float = 0.2,
         patch_norm: bool = True,
         use_checkpoint: bool = False,
@@ -185,23 +257,14 @@ def swin_transformer_small_patch4_window7(
         mid_channel: int = 128,
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
-        lr: float = 0.001,
-        gamma: float = 0.99,
+        swin_lr: float = 0.0001,
+        swin_weight_decay: float = 0.05,
+        yolox_lr: float = 0.001,
+        yolox_momentum: float = 0.9,
+        yolox_weight_decay: float = 5e-4,
         **kwargs,
 ) -> SwinTransformerSystem:
-    def pth_adapter(weight_pretrained_dir: Path) -> Dict:
-        file = weight_pretrained_dir.joinpath('cascade_mask_rcnn_swin_small_patch4_window7.pth')
-        if file.exists():
-            logger.info(f'Load pretrained file cascade_mask_rcnn_swin_small_patch4_window7.pth')
-            return torch.load(str(file))['state_dict']
-        else:
-            raise FileNotFoundError(
-                f'pretrained file cascade_mask_rcnn_swin_small_patch4_window7.pth '
-                f'not found in {str(weight_pretrained_dir)}!'
-            )
-
-    model = SwinTransformerSystem(
-        pretrain_adapter=pth_adapter if pretrained else None,
+    return SwinTransformerSystem(
         num_classes=num_classes,
         predict_num=predict_num,
         embed_dim=embed_dim,
@@ -210,6 +273,8 @@ def swin_transformer_small_patch4_window7(
         window_size=window_size,
         pretrain_img_size=pretrain_img_size,
         ape=ape,
+        drop_rate=drop_rate,
+        attn_drop_rate=attn_drop_rate,
         drop_path_rate=drop_path_rate,
         patch_norm=patch_norm,
         use_checkpoint=use_checkpoint,
@@ -220,9 +285,10 @@ def swin_transformer_small_patch4_window7(
         mid_channel=mid_channel,
         conf_thre=conf_thre,
         nms_thre=nms_thre,
-        lr=lr,
-        gamma=gamma,
+        swin_lr=swin_lr,
+        swin_weight_decay=swin_weight_decay,
+        yolox_lr=yolox_lr,
+        yolox_momentum=yolox_momentum,
+        yolox_weight_decay=yolox_weight_decay,
         **kwargs,
     )
-
-    return model

@@ -6,6 +6,7 @@ from torch.utils.data import Dataset, default_collate, DataLoader
 
 from ..constants import BatchKeys, BatchDict, PhaseTypes, AllConfigs, SubsetTypes
 from ..utils.phase_init import PhaseInitMixin
+from ..utils.lightning_logger import ravt_logger as logger
 from ..base_classes import BaseDataSource
 
 
@@ -50,6 +51,13 @@ class LocalDataModule(PhaseInitMixin, pl.LightningDataModule):
         self.data_source = data_source
         self.save_hyperparameters(ignore=['data_source'])
 
+        def worker_init_fn(worker_id: int) -> None:
+            import torch.multiprocessing
+            torch.multiprocessing.set_sharing_strategy('file_system')
+            logger.debug(f'Initializing worker {worker_id}')
+
+        self.worker_init_fn = worker_init_fn
+
     def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
         if phase == 'dataset':
             self.hparams.required_keys_train = configs['internal']['required_keys_train']
@@ -65,6 +73,7 @@ class LocalDataModule(PhaseInitMixin, pl.LightningDataModule):
             ),
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
+            worker_init_fn=self.worker_init_fn if self.hparams.num_workers != 0 else None,
             shuffle=True,
             persistent_workers=self.hparams.num_workers != 0,
         )
@@ -78,6 +87,7 @@ class LocalDataModule(PhaseInitMixin, pl.LightningDataModule):
             ),
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
+            worker_init_fn=self.worker_init_fn if self.hparams.num_workers != 0 else None,
             shuffle=False,
             persistent_workers=self.hparams.num_workers != 0,
         )
@@ -91,6 +101,7 @@ class LocalDataModule(PhaseInitMixin, pl.LightningDataModule):
             ),
             batch_size=self.hparams.batch_size,
             num_workers=self.hparams.num_workers,
+            worker_init_fn=self.worker_init_fn if self.hparams.num_workers != 0 else None,
             shuffle=False,
             persistent_workers=self.hparams.num_workers != 0,
         )

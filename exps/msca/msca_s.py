@@ -7,23 +7,23 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import fire
 
 from ravt.data_sources import ArgoverseDataSource
-from ravt.models import swin_transformer_small_patch4_window7
+from ravt.models import msca_s
 from ravt.launchers import TrainTestLauncher
 
 torch.set_float32_matmul_precision('high')
 
 
 def main(
-        exp_tag: str, predict_num: int = 0,
+        exp_tag: str, predict_num: int = 1,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
-    """ Train and test swin_s model on Argoverse-HD
+    """ Train and test msca_s model on Argoverse-HD
 
     :param exp_tag: the tag for the experiment
     :param predict_num: predict offset for the model
@@ -36,27 +36,22 @@ def main(
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
     data_source = ArgoverseDataSource()
-    model = swin_transformer_small_patch4_window7(
-        window_size=7,
+    model = msca_s(
         predict_num=predict_num,
+        neck_type='simple2',
         num_classes=8,
-        swin_lr=0.0001,
-        swin_weight_decay=0.05,
-        yolox_lr=0.001 / 64 * (batch_size or 2),
-        yolox_momentum=0.9,
-        yolox_weight_decay=5e-4,
-        drop_path_rate=0.2,
-        drop_rate=0.1,
-        attn_drop_rate=0.1,
+        lr=0.001 / 64 * (batch_size or 2),
+        momentum=0.9,
+        weight_decay=5e-4,
         conf_thre=0.01,
         nms_thre=0.65,
-        frozen_stages=-1,
     )
-    model.load_from_pth(Path(root_dir) / 'weights' / 'pretrained' / 'cascade_mask_rcnn_swin_small_patch4_window7.pth')
+    model.load_from_pth(Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth')
+    # model.load_from_pth(Path(root_dir) / 'weights' / 'benchmark' / 'streamyolo_s_012_official.pth')
     launcher = TrainTestLauncher(
-        system=model, data_source=data_source, exp_tag=exp_tag, max_epoch=30,
+        system=model, data_source=data_source, exp_tag=exp_tag, max_epoch=15,
         batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-        callback_ema=False, callback_visualize=visualize,
+        callback_ema=True, callback_visualize=visualize,
     )
     train_res = launcher.train(resume=None)
     test_res = launcher.test(resume='best')
@@ -65,4 +60,3 @@ def main(
 
 if __name__ == '__main__':
     fire.Fire(main)
-

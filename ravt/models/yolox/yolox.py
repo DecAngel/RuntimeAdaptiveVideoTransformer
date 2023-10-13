@@ -1,18 +1,18 @@
-from pathlib import Path
-from typing import Optional, Union, Dict, Tuple, Literal, Callable
+from typing import Optional, Union, Dict, Tuple, Literal
 
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch import nn
 
-from .blocks import YOLOXPAFPNBackbone, YOLOXHead, StreamYOLOScheduler, get_pth_adapter
+from .blocks import YOLOXPAFPNBackbone, YOLOXHead, StreamYOLOScheduler
 from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 from ravt.core.constants import (
     BatchDict, PredDict, LossDict, BatchKeys,
 )
 from ravt.core.base_classes import BaseSystem
+from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
 class YOLOXSystem(BaseSystem):
@@ -29,9 +29,6 @@ class YOLOXSystem(BaseSystem):
             num_classes: int = 8,
             max_objs: int = 100,
 
-            # pretrain parameters
-            pretrain_adapter: Optional[Callable[[Path], Dict]] = None,
-
             # predict parameters
             predict_num: int = 0,
 
@@ -47,11 +44,32 @@ class YOLOXSystem(BaseSystem):
             **kwargs,
     ):
         super().__init__(
-            pretrain_adapter=pretrain_adapter,
             preprocess=KorniaAugmentation(
                 train_aug=ka.VideoSequential(ka.RandomHorizontalFlip()),
                 train_resize=ka.VideoSequential(
-                    *[ka.Resize((h, w)) for h, w in zip(range(540, 661, 10), range(864, 1057, 16))],
+                    *[ka.Resize((h, w)) for h, w in [
+                        (496, 800),
+                        (496, 816),
+                        (512, 832),
+                        (528, 848),
+                        (528, 864),
+                        (544, 880),
+                        (560, 896),
+                        (560, 912),
+                        (576, 928),
+                        (576, 944),
+                        (592, 960),
+                        (608, 976),
+                        (608, 992),
+                        (624, 1008),
+                        (640, 1024),
+                        (640, 1040),
+                        (656, 1056),
+                        (656, 1072),
+                        (672, 1088),
+                        (688, 1104),
+                        (688, 1120),
+                    ]],
                     random_apply=1,
                 ),
                 eval_aug=None,
@@ -59,7 +77,7 @@ class YOLOXSystem(BaseSystem):
             ),
             metric=COCOEvalMAPMetric(),
         )
-        self.save_hyperparameters(ignore=['kwargs', 'pretrain_adapter'])
+        self.save_hyperparameters(ignore=['kwargs'])
 
         self.backbone = YOLOXPAFPNBackbone(**self.hparams)
         self.head = YOLOXHead(**self.hparams)
@@ -108,7 +126,7 @@ class YOLOXSystem(BaseSystem):
             'interval': 1,
             'margin': self.hparams.predict_num,
             'image': [0],
-            'bbox': [self.hparams.predict_num]
+            # 'bbox': [self.hparams.predict_num]
         }
 
     @property
@@ -118,6 +136,30 @@ class YOLOXSystem(BaseSystem):
             'margin': self.hparams.predict_num,
             'bbox': [self.hparams.predict_num],
         }
+
+    def pth_adapter(self, state_dict: Dict) -> Dict:
+        s = self.state_dict()
+        new_ckpt = {}
+        shape_mismatches = []
+        for k, v in state_dict['model'].items():
+            k = k.replace('lateral_conv0', 'down_conv_5_4')
+            k = k.replace('C3_p4', 'down_csp_4_4')
+            k = k.replace('reduce_conv1', 'down_conv_4_3')
+            k = k.replace('C3_p3', 'down_csp_3_3')
+            k = k.replace('bu_conv2', 'up_conv_3_3')
+            k = k.replace('C3_n3', 'up_csp_3_4')
+            k = k.replace('bu_conv1', 'up_conv_4_4')
+            k = k.replace('C3_n4', 'up_csp_4_5')
+            k = k.replace('backbone.jian2', 'neck.convs.0')
+            k = k.replace('backbone.jian1', 'neck.convs.1')
+            k = k.replace('backbone.jian0', 'neck.convs.2')
+            if k in s and s[k].shape != v.shape:
+                shape_mismatches.append(k)
+            else:
+                new_ckpt[k] = v
+        if len(shape_mismatches) > 0:
+            logger.warning(f'Ignoring params with mismatched shape: {shape_mismatches}')
+        return new_ckpt
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
         images: Float[torch.Tensor, 'B Ti C H W'] = batch['image']['image'].float()
@@ -168,7 +210,6 @@ class YOLOXSystem(BaseSystem):
 
 
 def yolox_s(
-        pretrained: bool = True,
         predict_num: int = 0,
         num_classes: int = 8,
         base_depth: int = 1,
@@ -188,7 +229,6 @@ def yolox_s(
 ) -> YOLOXSystem:
     return YOLOXSystem(
         num_classes=num_classes,
-        pretrain_adapter=get_pth_adapter('yolox_s.pth') if pretrained else None,
         predict_num=predict_num,
         base_depth=base_depth,
         base_channel=base_channel,

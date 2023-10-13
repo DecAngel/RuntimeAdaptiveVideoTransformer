@@ -15,6 +15,8 @@ import typeguard
 from timm.models.layers import DropPath, to_2tuple, trunc_normal_
 from jaxtyping import Float, Int
 
+from .types import IMAGE, PYRAMID
+
 
 class Mlp(nn.Module):
     """ Multilayer perceptron."""
@@ -590,10 +592,9 @@ class SwinTransformerBackbone(nn.Module):
 
         self.apply(_init_weights)
 
-    @typeguard.typechecked()
     def forward(
-            self, images: Float[torch.Tensor, 'batch_size channels_rgb=3 height width'],
-    ) -> Tuple[Float[torch.Tensor, 'batch_size channels height width'], ...]:
+            self, images: IMAGE,
+    ) -> PYRAMID:
         """Forward function."""
         x = self.patch_embed(images)
 

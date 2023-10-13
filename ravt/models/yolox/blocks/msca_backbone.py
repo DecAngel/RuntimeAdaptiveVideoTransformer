@@ -2,6 +2,7 @@ from typing import Tuple
 
 import torch
 import torch.nn as nn
+from jaxtyping import Float
 from torch.nn import functional as F
 
 from .darknet import CSPDarknet
@@ -9,7 +10,12 @@ from .network_blocks import DWConv, BaseConv, CSPLayer
 from .types import IMAGE, PYRAMID
 
 
-class YOLOXPAFPNBackbone(nn.Module):
+class MSCATemporal(nn.Module):
+    def __init__(self, in_channels: int):
+        self.
+
+
+class MSCABackbone(nn.Module):
     """This module extracts the FPN feature of a single image,
     similar to StreamYOLO's DFPPAFPN without the last DFP concat step.
 
@@ -76,12 +82,13 @@ class YOLOXPAFPNBackbone(nn.Module):
         )
 
     def forward(
-            self, image: IMAGE,
+            self, image: Float[torch.Tensor, 'batch_size time channels_rgb=3 height width'],
     ) -> PYRAMID:
         """ Extract the FPN feature (p3, p4, p5) of an image tensor of (b, 3, h, w)
 
         """
-        feature = self.backbone(image)
+        B, T, C, H, W = image.size()
+        feature = self.backbone(image.reshape(B*T, C, H, W))
         f3, f4, f5 = list(feature[f_name] for f_name in self.feature_names)
 
         # 5 -> 4 -> 3 -> 4 -> 5

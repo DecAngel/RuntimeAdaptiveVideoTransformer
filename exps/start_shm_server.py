@@ -7,11 +7,11 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from ravt.launchers import TensorboardLauncher
+from ravt.launchers import SharedMemoryLauncher
 
 
 def main():
-    server = TensorboardLauncher()
+    server = SharedMemoryLauncher()
     server.run()
 
 
