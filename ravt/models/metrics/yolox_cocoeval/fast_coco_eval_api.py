@@ -12,7 +12,7 @@ import numpy as np
 from pycocotools.cocoeval import COCOeval
 
 from .jit_ops import FastCOCOEvalOp
-from ravt.common.lightning_logger import ravt_logger as logger
+from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
 class COCOeval_opt(COCOeval):

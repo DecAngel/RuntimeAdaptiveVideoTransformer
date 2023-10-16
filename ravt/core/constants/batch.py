@@ -15,12 +15,14 @@ class _IDComponentDict(TypedDict, total=False):
     image_id: IDTypeN
     seq_id: IDTypeN
     frame_id: IDTypeN
+    clip_id: IDTypeN
 
 
 class _IDBatchDict(TypedDict, total=False):
     image_id: Shaped[IDTypeT, '*batch_size time_m']
     seq_id: Shaped[IDTypeT, '*batch_size time_m']
     frame_id: Shaped[IDTypeT, '*batch_size time_m']
+    clip_id: Shaped[IDTypeT, '*batch_size time_m']
 
 
 """Image Type"""

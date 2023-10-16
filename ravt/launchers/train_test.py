@@ -123,10 +123,10 @@ class TrainTestLauncher(BaseLauncher):
     def train(self, resume: Union[Path, str, Literal['last', 'best'], None]) -> TypedDict('TrainResult', {'eval_mAP': float}):
         self.log_exp_info()
         callbacks = [
-            pl.callbacks.ModelSummary(max_depth=2),
+            pl.callbacks.ModelSummary(max_depth=5),
             pl.callbacks.ModelCheckpoint(
                 save_last=True, monitor='mAP', mode='max', dirpath=str(self.output_ckpt_dir),
-                filename=f'{self.time_tag}_{{mAP:.4f}}_{self.parameter_tag}_{self.seed}'
+                filename=f'{self.time_tag}_{{mAP:.5f}}_{self.parameter_tag}_{self.seed}'
             ),
             pl.callbacks.LearningRateMonitor(logging_interval='step'),
             NewTqdmProgressBar(),

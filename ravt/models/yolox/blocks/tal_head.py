@@ -164,22 +164,28 @@ class TALHead(nn.Module):
             shape: Optional[Tuple[int, int]] = (600, 960),
     ) -> Union[YOLOXPredDict, YOLOXLossDict]:
         if self.training:
-            g1c, g2c = gt_coordinates.unbind(1)
-            g1l, g2l = gt_labels.unbind(1)
+            B, T, _, _, _ = features[0].size()
+            features = [f.flatten(0, 1) for f in features]
+            gt_coordinates_1 = gt_coordinates[:, :-1].flatten(0, 1)
+            gt_coordinates_2 = gt_coordinates[:, 1:].flatten(0, 1)
+            gt_labels_1 = gt_labels[:, :-1].flatten(0, 1)
+            gt_labels_2 = gt_labels[:, 1:].flatten(0, 1)
             loss, iou_loss, conf_loss, cls_loss, l1_loss, num_fg = self.forward_impl(
                 features, (
                     torch.cat([
-                        g2l.unsqueeze(-1).float(),
-                        xyxy2cxcywh(g2c),
+                        gt_labels_2.unsqueeze(-1).float(),
+                        xyxy2cxcywh(gt_coordinates_2),
                     ], dim=-1),
                     torch.cat([
-                        g1l.unsqueeze(-1).float(),
-                        xyxy2cxcywh(g1c),
+                        gt_labels_1.unsqueeze(-1).float(),
+                        xyxy2cxcywh(gt_coordinates_1),
                     ], dim=-1),
                 ),
             )
             return {'loss': loss}
         else:
+            B, T, _, _, _ = features[0].size()
+            features = [f.flatten(0, 1) for f in features]
             pred = self.forward_impl(features)
             pred = self.postprocess(pred)
             pred = torch.stack(list(clip_or_pad_along(p, 0, self.max_objs) for p in pred))
@@ -191,9 +197,9 @@ class TALHead(nn.Module):
                 pred_coordinates[..., [0, 2]] = pred_coordinates[..., [0, 2]].clamp(min=0, max=shape[1])
                 pred_coordinates[..., [1, 3]] = pred_coordinates[..., [1, 3]].clamp(min=0, max=shape[0])
             return {
-                'pred_coordinates': pred_coordinates.detach().float(),
-                'pred_probabilities': pred_probabilities.detach().float(),
-                'pred_labels': pred_labels.detach().long(),
+                'pred_coordinates': pred_coordinates.unflatten(0, (B, T)).detach().float(),
+                'pred_probabilities': pred_probabilities.unflatten(0, (B, T)).detach().float(),
+                'pred_labels': pred_labels.unflatten(0, (B, T)).detach().long(),
             }
 
     def forward_impl(self, xin, labels=None, imgs=None):

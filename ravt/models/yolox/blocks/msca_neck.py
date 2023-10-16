@@ -397,12 +397,11 @@ class Simple2Block(nn.Module):
     def __init__(
             self,
             in_channel: int,
+            # hidden_channel: int,
     ):
         super().__init__()
         self.fc_time_constant = nn.Sequential(
             nn.Linear(1, in_channel),
-            nn.SiLU(),
-            nn.Linear(in_channel, in_channel),
             nn.SiLU(),
             nn.LayerNorm(in_channel),
         )
@@ -410,9 +409,11 @@ class Simple2Block(nn.Module):
             nn.Linear(2 * in_channel, in_channel),
             nn.SiLU(),
         )
+        self.conv_p = BaseConv(in_channel, in_channel, 1, 1)
         self.spatial_max_pool = nn.AdaptiveMaxPool2d((1, 1))
         self.spatial_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
-        self.norm = nn.LayerNorm(in_channel)
+        self.norm_attn = nn.LayerNorm(in_channel)
+        self.norm_mlp = nn.LayerNorm(in_channel)
         self.fc_query = nn.Linear(in_channel, in_channel)
         self.fc_key = nn.Linear(in_channel, in_channel)
         self.fc_value = nn.Linear(in_channel, in_channel)
@@ -421,13 +422,12 @@ class Simple2Block(nn.Module):
             nn.SiLU(),
             nn.Conv2d(in_channel, in_channel, 1, 1),
             nn.SiLU(),
-            nn.BatchNorm2d(in_channel),
         )
         self.p_attn = nn.Parameter(
-            torch.tensor(0.01).repeat(1, 1, in_channel, 1, 1), requires_grad=True
+            torch.tensor(1.0).repeat(1, 1, in_channel, 1, 1), requires_grad=True
         )
         self.p_mlp = nn.Parameter(
-            torch.tensor(0.01).repeat(1, 1, in_channel, 1, 1), requires_grad=True
+            torch.tensor(1.0).repeat(1, 1, in_channel, 1, 1), requires_grad=True
         )
 
     def forward(
@@ -440,13 +440,14 @@ class Simple2Block(nn.Module):
         TP = past_time_constant.size(0)
         TF = future_time_constant.size(0)
 
-        feature_p = feature[:, -1:] - feature[:, :-1]                               # B TP C H W
+        feature_p = self.conv_p(feature.flatten(0, 1)).unflatten(0, (B, TP + 1))    # B TP C H W
+        # feature_p = feature_p[:, -1:] - feature_p[:, :-1]                           # B TP C H W
         feature_f = feature[:, -1:].expand(-1, TF, -1, -1, -1)                      # B TF C H W
         ptc = self.fc_time_constant(past_time_constant[:, None])[None, :, :]        # 1 TP C
         ftc = self.fc_time_constant(future_time_constant[:, None])[None, :, :]      # 1 TF C
 
         # B TP C
-        attn_in_p = feature_p.flatten(0, 1)
+        attn_in_p = feature_p[:, :-1].flatten(0, 1)
         attn_in_p = torch.cat([self.spatial_max_pool(attn_in_p), self.spatial_avg_pool(attn_in_p)], dim=1)
         attn_in_p = attn_in_p.unflatten(0, (B, TP)).squeeze(-1).squeeze(-1)
         attn_in_p = self.fc_in(attn_in_p) + ptc
@@ -458,14 +459,23 @@ class Simple2Block(nn.Module):
 
         attn_query = self.fc_query(attn_in_f)                                       # B TF C
         attn_key = self.fc_key(attn_in_p)                                           # B TP C
-        attn_value = self.fc_value(attn_in_p)                                       # B TP C
+        attn_value = (feature_p[:, -1:]-feature_p[:, :-1]).flatten(2, 4)                                        # B TP CHW
 
-        # B TF C
-        attn = nn.functional.scaled_dot_product_attention(attn_query, attn_key, attn_value)
-        attn = self.norm(attn)
+        # B TF CHW
+        attn_weight = attn_query @ attn_key.transpose(-2, -1) / math.sqrt(attn_query.size(-1))
+        attn = attn_weight @ attn_value         # BHW TF C
+        # attn = nn.functional.scaled_dot_product_attention(attn_query, attn_key, attn_value)
+        # B TF H W C
+        attn = attn.unflatten(2, (C, H, W)).permute(0, 1, 3, 4, 2)
         # B TF C H W
-        feature_f = feature_f + attn[..., None, None] * self.p_attn
-        feature_f = feature_f + self.fc_mlp(feature_f.flatten(0, 1)).unflatten(0, (B, TP)) * self.p_mlp
+        attn = self.norm_attn(attn).permute(0, 1, 4, 2, 3)
+        # B TF C H W
+        feature_f = feature_f + attn * self.p_attn
+
+        # B TF H W C
+        mlp = self.fc_mlp(feature_f.flatten(0, 1)).unflatten(0, (B, TP)).permute(0, 1, 3, 4, 2)
+        # B TF C H W
+        feature_f = feature_f + self.norm_mlp(mlp).permute(0, 1, 4, 2, 3) * self.p_mlp
 
         return feature_f
 
@@ -488,8 +498,9 @@ class Simple2Block(nn.Module):
         key = self.fc_key(feature_past)                                             # BHW TP C
         value = self.fc_value(feature_past)                                         # BHW TP C
 
-        attn = nn.functional.scaled_dot_product_attention(query, key, value)        # BHW TF C
-        attn = self.norm(attn)                                                    # BHW TF C
+        attn_weight = query @ key.transpose(-2, -1) / math.sqrt(query.size(-1))
+        attn = attn_weight @ value                                                  # BHW TF C
+        attn = self.norm(attn)                                                      # BHW TF C
         ff = feature_now + attn                                                     # BHW TF C
 
         ff = ff + self.fc_mlp(ff)                                                   # BHW TF C
@@ -516,4 +527,36 @@ class Simple2Neck(nn.Module):
         outputs = []
         for f, block in zip(features, self.blocks):
             outputs.append(block(f, self.ptc, self.ftc).squeeze(1))
+        return tuple(outputs)
+
+
+class Simple3Neck(nn.Module):
+    def __init__(
+            self,
+            in_channels: Tuple[int, ...],
+            past_time_constant: List[int],
+            future_time_constant: List[int],
+            **kwargs
+    ):
+        super().__init__()
+        ptc = torch.tensor([past_time_constant])
+        ftc = torch.tensor([future_time_constant])
+        s = torch.exp(ftc.T @ ptc)
+        w = s / torch.sum(s, dim=1, keepdim=True) * ftc.T
+        self.register_parameter('attn_weight_ta', nn.Parameter(w, requires_grad=True))
+        self.convs_f = nn.ModuleList([
+            BaseConv(c, c, 1, 1)
+            for c in in_channels
+        ])
+
+    def forward(self, features: Tuple[Float[torch.Tensor, 'batch_size time channels height width'], ...]):
+        outputs = []
+        for i, f in enumerate(features):
+            B, TP0, C, H, W = f.size()
+            feature_conv = self.convs_f[i](f.flatten(0, 1)).unflatten(0, (B, TP0))
+            feature_p = feature_conv[:, -1:] - feature_conv[:, :-1]
+            attn = (self.attn_weight_ta @ feature_p.permute(0, 3, 4, 1, 2)).permute(0, 3, 4, 1, 2)
+
+            outputs.append((f[:, -1:] + attn).squeeze(1))
+
         return tuple(outputs)

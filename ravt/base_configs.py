@@ -1,3 +1,5 @@
+import sys
+import os
 from pathlib import Path
 
 # Path configs, must be initialized before
@@ -21,6 +23,8 @@ for name in s:
 # Other configs
 tensorboard_port = 8189
 shared_memory_port = 8200
+
+os.environ['PATH'] = f'{str(ravt_dir.resolve())}:' + os.environ['PATH']
 
 environment_configs = {
     'environment': {

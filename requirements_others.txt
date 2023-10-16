@@ -14,3 +14,4 @@ tensorboard
 sap_toolkit
 typeguard==3.0.2
 jaxtyping
+ninja

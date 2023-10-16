@@ -1,6 +1,5 @@
 from typing import Any, TypeVar
 
-import typeguard
 import torch
 import numpy as np
 
@@ -8,7 +7,6 @@ import numpy as np
 ArrayType = TypeVar('ArrayType', torch.Tensor, np.ndarray)
 
 
-@typeguard.typechecked()
 def slice_along(
         arr: ArrayType, axis: int, start: int, end: int, step: int = 1
 ) -> ArrayType:
@@ -24,7 +22,6 @@ def slice_along(
     return arr[(slice(None), ) * (axis % arr.ndim) + (slice(start, end, step),)]
 
 
-@typeguard.typechecked()
 def clip_or_pad_along(
         arr: ArrayType, axis: int, fixed_length: int, pad_value: Any = 0
 ) -> ArrayType:
@@ -52,7 +49,6 @@ def clip_or_pad_along(
         return arr
 
 
-@typeguard.typechecked()
 def remove_pad_along(
         arr: ArrayType, axis: int, pad_value: Any = 0
 ) -> ArrayType:
@@ -84,14 +80,12 @@ def remove_pad_along(
         return slice_along(arr, axis, 0, max(data_length, 1))
 
 
-@typeguard.typechecked()
 def xyxy2cxcywh(coordinates: ArrayType) -> ArrayType:
     cxcy = (coordinates[..., :2] + coordinates[..., 2:]) / 2
     wh = (coordinates[..., 2:] - coordinates[..., :2])
     return np.concatenate([cxcy, wh], axis=-1) if isinstance(coordinates, np.ndarray) else torch.cat([cxcy, wh], dim=-1)
 
 
-@typeguard.typechecked()
 def xyxy2xywh(coordinates: ArrayType) -> ArrayType:
     xy = coordinates[..., :2]
     wh = coordinates[..., 2:] - coordinates[..., :2]

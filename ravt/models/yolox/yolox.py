@@ -98,6 +98,7 @@ class YOLOXSystem(BaseSystem):
                 'image_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
                 'seq_id': torch.ones(4, 1, dtype=torch.int32),
                 'frame_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
+                'clip_id': torch.arange(0, 1, dtype=torch.int32).unsqueeze(0).expand(4, -1),
                 'image': torch.zeros(4, 1, 3, 600, 960, dtype=torch.uint8),
                 'original_size': torch.ones(4, 1, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
@@ -105,6 +106,7 @@ class YOLOXSystem(BaseSystem):
                 'image_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
                 'seq_id': torch.ones(4, 1, dtype=torch.int32),
                 'frame_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
+                'clip_id': torch.arange(0, 1, dtype=torch.int32).unsqueeze(0).expand(4, -1),
                 'coordinate': torch.zeros(4, 1, 100, 4, dtype=torch.float32),
                 'label': torch.zeros(4, 1, 100, dtype=torch.int32),
                 'probability': torch.zeros(4, 1, 100, dtype=torch.float32),
@@ -138,9 +140,7 @@ class YOLOXSystem(BaseSystem):
         }
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
-        s = self.state_dict()
         new_ckpt = {}
-        shape_mismatches = []
         for k, v in state_dict['model'].items():
             k = k.replace('lateral_conv0', 'down_conv_5_4')
             k = k.replace('C3_p4', 'down_csp_4_4')
@@ -153,12 +153,7 @@ class YOLOXSystem(BaseSystem):
             k = k.replace('backbone.jian2', 'neck.convs.0')
             k = k.replace('backbone.jian1', 'neck.convs.1')
             k = k.replace('backbone.jian0', 'neck.convs.2')
-            if k in s and s[k].shape != v.shape:
-                shape_mismatches.append(k)
-            else:
-                new_ckpt[k] = v
-        if len(shape_mismatches) > 0:
-            logger.warning(f'Ignoring params with mismatched shape: {shape_mismatches}')
+            new_ckpt[k] = v
         return new_ckpt
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
@@ -166,29 +161,27 @@ class YOLOXSystem(BaseSystem):
         coordinates: Optional[Float[torch.Tensor, 'B Tb O C']] = batch['bbox']['coordinate'] if 'bbox' in batch else None
         labels: Optional[Int[torch.Tensor, 'B Tb O']] = batch['bbox']['label'] if 'bbox' in batch else None
 
-        image_0, = images.unbind(1)
-        feature_p = self.backbone(image_0)
+        features = self.backbone(images)
 
         if self.training:
-            coordinate_p, = coordinates.unbind(1)
-            label_p, = labels.unbind(1)
             loss_dict = self.head(
-                feature_p,
-                gt_coordinates=coordinate_p,
-                gt_labels=label_p,
-                shape=image_0.shape[-2:]
+                features,
+                gt_coordinates=coordinates,
+                gt_labels=labels,
+                shape=images.shape[-2:]
             )
             return loss_dict
         else:
-            pred_dict = self.head(feature_p, shape=image_0.shape[-2:])
+            pred_dict = self.head(features, shape=images.shape[-2:])
             return {
                 'bbox': {
                     'image_id': batch['image']['image_id'] + self.cp,
                     'seq_id': batch['image']['seq_id'],
                     'frame_id': batch['image']['frame_id'] + self.cp,
-                    'coordinate': pred_dict['pred_coordinates'].unsqueeze(1),
-                    'label': pred_dict['pred_labels'].unsqueeze(1),
-                    'probability': pred_dict['pred_probabilities'].unsqueeze(1),
+                    'clip_id': batch['image']['clip_id'] + self.cp,
+                    'coordinate': pred_dict['pred_coordinates'],
+                    'label': pred_dict['pred_labels'],
+                    'probability': pred_dict['pred_probabilities'],
                 }
             }
 

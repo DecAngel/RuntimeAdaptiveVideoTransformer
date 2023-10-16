@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import TypedDict, List, Dict
+from typing import TypedDict, List, Dict, Tuple
 
 from .types import StageTypes
 
@@ -29,6 +29,7 @@ class BatchKeys(TypedDict, total=False):
 class InternalConfigs(TypedDict, total=False):
     exp_tag: str
     stage: StageTypes
+    original_size: Tuple[int, int]
     required_keys_train: BatchKeys
     required_keys_eval: BatchKeys
     produced_keys: BatchKeys

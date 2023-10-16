@@ -1,11 +1,13 @@
-from typing import Optional, Dict, Tuple, Literal, Union
+from typing import Optional, Dict, Tuple, Literal, Union, List
 
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch import nn
 
-from .blocks import YOLOXPAFPNBackbone, MSCANeck, TALHead, StreamYOLOScheduler, SimpleNeck, MSCAScheduler, Simple2Neck
+from .blocks import (
+    YOLOXPAFPNBackbone, TALHead, MSCAScheduler, StreamYOLOScheduler, TANeck, YOLOXHead
+)
 from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 from ravt.core.constants import (
@@ -28,10 +30,11 @@ class MSCASystem(BaseSystem):
             act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
             num_classes: int = 8,
             max_objs: int = 100,
-            neck_type: Literal['mscta', 'simple', 'simple2'] = 'mscta',
+            neck_type: Literal['ta'] = 'ta',
 
             # predict parameters
-            predict_num: int = 1,
+            past_time_constant: List[int] = None,
+            future_time_constant: List[int] = None,
 
             # postprocess parameters
             conf_thre: float = 0.01,
@@ -78,19 +81,36 @@ class MSCASystem(BaseSystem):
             ),
             metric=COCOEvalMAPMetric(),
         )
+        past_time_constant = past_time_constant or [-1]
+        future_time_constant = future_time_constant or [1]
+        pos_0 = -min(past_time_constant)
+        pos_ptc = [c+pos_0 for c in past_time_constant]
+        pos_ftc = [c+pos_0 for c in future_time_constant]
         self.save_hyperparameters(ignore=['kwargs'])
+        self.hparams.pos_0 = pos_0
+        self.hparams.pos_ptc = pos_ptc
+        self.hparams.pos_ftc = pos_ftc
 
         self.backbone = YOLOXPAFPNBackbone(**self.hparams)
-        if neck_type == 'mscta':
-            self.neck = MSCANeck(in_channels)
-        elif neck_type == 'simple':
-            self.neck = SimpleNeck(in_channels, time_constant=[1])
-        elif neck_type == 'simple2':
-            self.neck = Simple2Neck(in_channels, [-self.hparams.predict_num], [self.hparams.predict_num])
+        if neck_type == 'ta':
+            self.neck = TANeck(
+                in_channels,
+                self.hparams.past_time_constant,
+                self.hparams.future_time_constant,
+            )
         else:
             raise ValueError(f'Unsupported neck_type: {neck_type}')
         self.head = TALHead(**self.hparams)
-        self.register_buffer('cp', tensor=torch.tensor(self.hparams.predict_num, dtype=torch.int32), persistent=False)
+        self.register_buffer(
+            'c_pos_ftc',
+            torch.tensor([pos_ftc], dtype=torch.int32),
+            persistent=False,
+        )
+        self.register_buffer(
+            'c_pos_ptc',
+            torch.tensor([pos_ptc], dtype=torch.int32),
+            persistent=False,
+        )
 
         def init_yolo(M):
             for m in M.modules():
@@ -103,13 +123,14 @@ class MSCASystem(BaseSystem):
     @property
     def example_input_array(self) -> Tuple[BatchDict]:
         b = 2
-        p = self.hparams.predict_num + 1
+        p = len(self.hparams.past_time_constant) + 1
+        f = p + len(self.hparams.future_time_constant)
         return {
             'image': {
                 'image_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
                 'seq_id': torch.ones(b, p, dtype=torch.int32),
                 'frame_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
-                # 'image': torch.randint(0, 255, (b, p, 3, 600, 960), dtype=torch.uint8),
+                'clip_id': torch.arange(0, p, dtype=torch.int32).unsqueeze(0).expand(b, -1),
                 'image': torch.randint(0, 255, (b, p, 3, 600, 960), dtype=torch.uint8),
                 'original_size': torch.ones(b, p, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
@@ -117,6 +138,7 @@ class MSCASystem(BaseSystem):
                 'image_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
                 'seq_id': torch.ones(b, p, dtype=torch.int32),
                 'frame_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
+                'clip_id': torch.arange(p, f, dtype=torch.int32).unsqueeze(0).expand(b, -1),
                 'coordinate': torch.zeros(b, p, 100, 4, dtype=torch.float32),
                 'label': torch.zeros(b, p, 100, dtype=torch.int32),
                 'probability': torch.zeros(b, p, 100, dtype=torch.float32),
@@ -125,29 +147,29 @@ class MSCASystem(BaseSystem):
 
     @property
     def required_keys_train(self) -> BatchKeys:
-        p = self.hparams.predict_num
         return {
             'interval': 1,
-            'margin': p*2,
-            'image': list(range(0, p+1)),
-            'bbox': [self.hparams.predict_num, self.hparams.predict_num*2],
+            'margin': max(self.hparams.pos_ftc)+1,
+            'image': self.hparams.pos_ptc+[self.hparams.pos_0],
+            'bbox': [self.hparams.pos_0]+self.hparams.pos_ftc,
         }
 
     @property
     def required_keys_eval(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': self.hparams.predict_num*2,
-            'image': [0, self.hparams.predict_num],
-            # 'bbox': [self.hparams.predict_num, self.hparams.predict_num*2],
+            'margin': max(self.hparams.pos_ftc)+1,
+            'image': self.hparams.pos_ptc+[self.hparams.pos_0],
+            # 'bbox': [self.hparams.pos_0]+self.hparams.pos_ftc,
         }
 
     @property
     def produced_keys(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': self.hparams.predict_num*2,
-            'bbox': [self.hparams.predict_num*2],
+            'margin': max(self.hparams.pos_ftc)+1,
+            # 'image': self.hparams.pos_ptc+[self.hparams.pos_0],
+            'bbox': self.hparams.pos_ftc,
         }
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
@@ -175,31 +197,31 @@ class MSCASystem(BaseSystem):
         return new_ckpt
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
-        images: Float[torch.Tensor, 'B Ti C H W'] = batch['image']['image'].float()
-        coordinates: Optional[Float[torch.Tensor, 'B Tb O C']] = batch['bbox']['coordinate'] if 'bbox' in batch else None
-        labels: Optional[Int[torch.Tensor, 'B Tb O']] = batch['bbox']['label'] if 'bbox' in batch else None
+        images: Float[torch.Tensor, 'B TP0 C H W'] = batch['image']['image'].float()
+        coordinates: Optional[Float[torch.Tensor, 'B TF0 O C']] = batch['bbox']['coordinate'] if 'bbox' in batch else None
+        labels: Optional[Int[torch.Tensor, 'B TF0 O']] = batch['bbox']['label'] if 'bbox' in batch else None
 
-        image_0, image_p = images.unbind(1)
-        feature_0, feature_p = self.backbone(image_0), self.backbone(image_p)
-        feature_2p = self.neck(tuple(torch.stack([f0, fp], dim=1) for f0, fp in zip(feature_0, feature_p)))
+        features_p = self.backbone(images)
+        features_f = self.neck(features_p)
         if self.training:
             loss_dict = self.head(
-                feature_2p,
+                features_f,
                 gt_coordinates=coordinates,
                 gt_labels=labels,
-                shape=image_0.shape[-2:]
+                shape=images.shape[-2:]
             )
             return loss_dict
         else:
-            pred_dict = self.head(feature_2p, shape=image_0.shape[-2:])
+            pred_dict = self.head(features_f, shape=images.shape[-2:])
             return {
                 'bbox': {
-                    'image_id': batch['image']['image_id'][:, -1:] + self.cp,
-                    'seq_id': batch['image']['seq_id'][:, -1:],
-                    'frame_id': batch['image']['frame_id'][:, -1:] + self.cp,
-                    'coordinate': pred_dict['pred_coordinates'].unsqueeze(1),
-                    'label': pred_dict['pred_labels'].unsqueeze(1),
-                    'probability': pred_dict['pred_probabilities'].unsqueeze(1),
+                    'image_id': batch['image']['image_id'][:, :1] + self.c_pos_ftc,
+                    'seq_id': batch['image']['seq_id'][:, :1],
+                    'frame_id': batch['image']['frame_id'][:, :1] + self.c_pos_ftc,
+                    'clip_id': batch['image']['clip_id'][:, :1] + self.c_pos_ftc,
+                    'coordinate': pred_dict['pred_coordinates'],
+                    'label': pred_dict['pred_labels'],
+                    'probability': pred_dict['pred_probabilities'],
                 }
             }
 
@@ -215,13 +237,14 @@ class MSCASystem(BaseSystem):
         optimizer = torch.optim.SGD(p_norm, lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True)
         optimizer.add_param_group({"params": p_weight, "weight_decay": self.hparams.weight_decay})
         optimizer.add_param_group({"params": p_bias})
-        scheduler = MSCAScheduler(optimizer, int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs))
+        scheduler = StreamYOLOScheduler(optimizer, int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs))
 
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
 
 def msca_s(
-        predict_num: int = 1,
+        past_time_constant: List[int] = None,
+        future_time_constant: List[int] = None,
         num_classes: int = 8,
         base_depth: int = 1,
         base_channel: int = 32,
@@ -231,7 +254,7 @@ def msca_s(
         depthwise: bool = False,
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
-        neck_type: Literal['mscta', 'simple', 'simple2'] = 'mscta',
+        neck_type: Literal['ta'] = 'ta',
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
         lr: float = 0.001,
@@ -240,8 +263,9 @@ def msca_s(
         **kwargs
 ) -> MSCASystem:
     return MSCASystem(
+        past_time_constant=past_time_constant,
+        future_time_constant=future_time_constant,
         num_classes=num_classes,
-        predict_num=predict_num,
         base_depth=base_depth,
         base_channel=base_channel,
         strides=strides,

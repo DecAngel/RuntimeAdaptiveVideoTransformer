@@ -234,6 +234,10 @@ class YOLOXHead(nn.Module):
             shape: Optional[Tuple[int, int]] = (600, 960),
     ) -> Union[YOLOXPredDict, YOLOXLossDict]:
         if self.training:
+            B, T, _, _, _ = features[0].size()
+            features = [f.flatten(0, 1) for f in features]
+            gt_coordinates = gt_coordinates.flatten(0, 1)
+            gt_labels = gt_labels.flatten(0, 1)
             loss, iou_loss, conf_loss, cls_loss, l1_loss, num_fg = self.forward_impl(
                 features, torch.cat([
                     gt_labels.unsqueeze(-1).float(),
@@ -242,6 +246,8 @@ class YOLOXHead(nn.Module):
             )
             return {'loss': loss}
         else:
+            B, T, _, _, _ = features[0].size()
+            features = [f.flatten(0, 1) for f in features]
             pred = self.forward_impl(features)
             pred = self.postprocess(pred)
             pred = torch.stack(list(clip_or_pad_along(p, 0, self.max_objs) for p in pred))
@@ -253,9 +259,9 @@ class YOLOXHead(nn.Module):
                 pred_coordinates[..., [0, 2]] = pred_coordinates[..., [0, 2]].clamp(min=0, max=shape[1])
                 pred_coordinates[..., [1, 3]] = pred_coordinates[..., [1, 3]].clamp(min=0, max=shape[0])
             return {
-                'pred_coordinates': pred_coordinates.detach().float(),
-                'pred_probabilities': pred_probabilities.detach().float(),
-                'pred_labels': pred_labels.detach().long(),
+                'pred_coordinates': pred_coordinates.unflatten(0, (B, T)).detach().float(),
+                'pred_probabilities': pred_probabilities.unflatten(0, (B, T)).detach().float(),
+                'pred_labels': pred_labels.unflatten(0, (B, T)).detach().long(),
             }
 
     def forward_impl(self, xin, labels=None):

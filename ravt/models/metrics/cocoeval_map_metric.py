@@ -3,7 +3,7 @@ import contextlib
 import io
 import json
 import tempfile
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 import torch
 from pycocotools.coco import COCO
@@ -42,10 +42,7 @@ class COCOEvalMAPMetric(BaseMetric):
         )
         self.coco: Optional[COCO] = None
         self.available: bool = False
-        self.add_state('image_id_list', default=[], dist_reduce_fx='cat')
-        self.add_state('category_id_list', default=[], dist_reduce_fx='cat')
-        self.add_state('bbox_list', default=[], dist_reduce_fx='cat')
-        self.add_state('score_list', default=[], dist_reduce_fx='cat')
+        self.time_map: List[int] = []
 
     def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
         if phase == 'evaluation':
@@ -60,6 +57,18 @@ class COCOEvalMAPMetric(BaseMetric):
                 else:
                     raise ValueError(f'No coco file for stage {stage}')
                 self.available = True
+
+                r_keys = configs['internal']['required_keys_eval']
+                p_keys = configs['internal']['produced_keys']
+                latest = max(r_keys['image'])
+                self.time_map = []
+                for i, b in enumerate(p_keys['bbox']):
+                    self.time_map.append(b-latest)
+                    self.add_state(f'image_id_list_{i}', default=[], dist_reduce_fx='cat')
+                    self.add_state(f'category_id_list_{i}', default=[], dist_reduce_fx='cat')
+                    self.add_state(f'bbox_list_{i}', default=[], dist_reduce_fx='cat')
+                    self.add_state(f'score_list_{i}', default=[], dist_reduce_fx='cat')
+
         return configs
 
     def update(
@@ -74,10 +83,17 @@ class COCOEvalMAPMetric(BaseMetric):
         current_size = torch.tensor(batch['image']['image'].shape[-2:], dtype=torch.float32, device=self.device)
         r = (original_size / current_size)[..., [1, 0, 1, 0]]
 
-        self.image_id_list.extend(pred['bbox']['image_id'].cpu().flatten(0, 1).unbind(0))
-        self.category_id_list.extend(pred['bbox']['label'].cpu().flatten(0, 1).unbind(0))
-        self.bbox_list.extend(xyxy2xywh(r*pred['bbox']['coordinate']).cpu().flatten(0, 1).unbind(0))
-        self.score_list.extend(pred['bbox']['probability'].cpu().flatten(0, 1).unbind(0))
+        image_ids = pred['bbox']['image_id'].cpu()
+        category_ids = pred['bbox']['label'].cpu()
+        bboxes = xyxy2xywh(r*pred['bbox']['coordinate']).cpu()
+        scores = pred['bbox']['probability'].cpu()
+        for i, (ii, c, b, s) in enumerate(zip(
+                image_ids.unbind(1), category_ids.unbind(1), bboxes.unbind(1), scores.unbind(1)
+        )):
+            getattr(self, f'image_id_list_{i}').extend(ii.unbind(0))
+            getattr(self, f'category_id_list_{i}').extend(c.unbind(0))
+            getattr(self, f'bbox_list_{i}').extend(b.unbind(0))
+            getattr(self, f'score_list_{i}').extend(s.unbind(0))
 
     def compute(self) -> MetricDict:
         # gt, outputs
@@ -85,41 +101,47 @@ class COCOEvalMAPMetric(BaseMetric):
         cocoGt = self.coco
 
         # construct outputs
-        outputs = []
-        for i, c, b, p in zip(
-            self.image_id_list,
-            self.category_id_list,
-            self.bbox_list,
-            self.score_list,
-        ):
-            i = i.numpy().item()
-            for _c, _b, _p in zip(c.numpy(), b.numpy(), p.numpy()):
-                if _p > 1e-5:
-                    outputs.append({
-                        'image_id': i,
-                        'category_id': _c.item(),
-                        'bbox': _b.tolist(),
-                        'score': _p.item(),
-                        'segmentation': [],
-                    })
+        res = {}
+        for i, t in enumerate(self.time_map):
+            outputs = []
+            for ii, c, b, p in zip(
+                getattr(self, f'image_id_list_{i}'),
+                getattr(self, f'category_id_list_{i}'),
+                getattr(self, f'bbox_list_{i}'),
+                getattr(self, f'score_list_{i}'),
+            ):
+                ii = ii.numpy().item()
+                for _c, _b, _p in zip(c.numpy(), b.numpy(), p.numpy()):
+                    if _p > 1e-5:
+                        outputs.append({
+                            'image_id': ii,
+                            'category_id': _c.item(),
+                            'bbox': _b.tolist(),
+                            'score': _p.item(),
+                            'segmentation': [],
+                        })
 
-        if len(outputs) == 0:
-            return {'mAP': torch.tensor(0.0, dtype=torch.float32, device=self.device)}
-        else:
-            outputs = sorted(outputs, key=lambda x: x['image_id'])
+            if len(outputs) == 0:
+                return {'mAP': torch.tensor(0.0, dtype=torch.float32, device=self.device)}
+            else:
+                outputs = sorted(outputs, key=lambda x: x['image_id'])
 
-        res_str = io.StringIO()
-        with contextlib.redirect_stdout(res_str):
-            # pred
-            _, tmp = tempfile.mkstemp()
-            json.dump(outputs, open(tmp, "w"))
-            cocoDt = cocoGt.loadRes(tmp)
+            res_str = io.StringIO()
+            with contextlib.redirect_stdout(res_str):
+                # pred
+                _, tmp = tempfile.mkstemp()
+                json.dump(outputs, open(tmp, "w"))
+                cocoDt = cocoGt.loadRes(tmp)
 
-            # eval
-            cocoEval = COCOeval(cocoGt, cocoDt, 'bbox')
-            cocoEval.evaluate()
-            cocoEval.accumulate()
+                # eval
+                cocoEval = COCOeval(cocoGt, cocoDt, 'bbox')
+                cocoEval.evaluate()
+                cocoEval.accumulate()
 
-            cocoEval.summarize()
+                cocoEval.summarize()
 
-        return {'mAP': torch.tensor(float(cocoEval.stats[0]), dtype=torch.float32, device=self.device)}
+            m = torch.tensor(float(cocoEval.stats[0]), dtype=torch.float32, device=self.device)
+            res[f'mAP_{t}'] = m
+            if i == 0:
+                res['mAP'] = m
+        return res

@@ -7,7 +7,7 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Literal, Optional
+from typing import Literal, Optional, List
 
 import torch
 import fire
@@ -20,13 +20,14 @@ torch.set_float32_matmul_precision('high')
 
 
 def main(
-        exp_tag: str, predict_num: int = 1,
+        exp_tag: str, past_time_constant: str, future_time_constant: str,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
     """ Train and test msca_s model on Argoverse-HD
 
     :param exp_tag: the tag for the experiment
-    :param predict_num: predict offset for the model
+    :param past_time_constant:
+    :param future_time_constant:
     :param batch_size: batch size of the exp, set None to auto-detect
     :param device_id: the cuda device id to place the model on
     :param visualize: enable visualization
@@ -37,8 +38,9 @@ def main(
     num_workers = 0 if debug else 8
     data_source = ArgoverseDataSource()
     model = msca_s(
-        predict_num=predict_num,
-        neck_type='simple2',
+        past_time_constant=[int(c) for c in past_time_constant.split(',')],
+        future_time_constant=[int(c) for c in future_time_constant.split(',')],
+        neck_type='ta',
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
         momentum=0.9,

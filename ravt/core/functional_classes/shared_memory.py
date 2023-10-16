@@ -8,7 +8,6 @@ from multiprocessing import resource_tracker
 from typing import Tuple, Any, Dict, List, Optional
 
 import numpy as np
-from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import ServerConnection, serve
 from websockets.sync.client import ClientConnection, connect
 

@@ -105,6 +105,7 @@ class StreamYOLOSystem(BaseSystem):
                 'image_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
                 'seq_id': torch.ones(4, 2, dtype=torch.int32),
                 'frame_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
+                'clip_id': torch.arange(0, 2, dtype=torch.int32).unsqueeze(0).expand(4, -1),
                 'image': torch.zeros(4, 2, 3, 600, 960, dtype=torch.uint8),
                 'original_size': torch.ones(4, 2, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
@@ -112,6 +113,7 @@ class StreamYOLOSystem(BaseSystem):
                 'image_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
                 'seq_id': torch.ones(4, 2, dtype=torch.int32),
                 'frame_id': torch.arange(0, 8, dtype=torch.int32).reshape(4, 2),
+                'clip_id': torch.arange(1, 3, dtype=torch.int32).unsqueeze(0).expand(4, -1),
                 'coordinate': torch.zeros(4, 2, 100, 4, dtype=torch.float32),
                 'label': torch.zeros(4, 2, 100, dtype=torch.int32),
                 'probability': torch.zeros(4, 2, 100, dtype=torch.float32),
@@ -173,27 +175,27 @@ class StreamYOLOSystem(BaseSystem):
         coordinates: Optional[Float[torch.Tensor, 'B Tb O C']] = batch['bbox']['coordinate'] if 'bbox' in batch else None
         labels: Optional[Int[torch.Tensor, 'B Tb O']] = batch['bbox']['label'] if 'bbox' in batch else None
 
-        image_0, image_p = images.unbind(1)
-        feature_0, feature_p = self.backbone(image_0), self.backbone(image_p)
-        feature_2p = self.neck((feature_0, feature_p))
+        features = self.backbone(images)
+        features_2p = self.neck(features)
         if self.training:
             loss_dict = self.head(
-                feature_2p,
+                features_2p,
                 gt_coordinates=coordinates,
                 gt_labels=labels,
-                shape=image_0.shape[-2:]
+                shape=images.shape[-2:]
             )
             return loss_dict
         else:
-            pred_dict = self.head(feature_2p, shape=image_0.shape[-2:])
+            pred_dict = self.head(features_2p, shape=images.shape[-2:])
             return {
                 'bbox': {
                     'image_id': batch['image']['image_id'][:, -1:] + self.cp,
                     'seq_id': batch['image']['seq_id'][:, -1:],
                     'frame_id': batch['image']['frame_id'][:, -1:] + self.cp,
-                    'coordinate': pred_dict['pred_coordinates'].unsqueeze(1),
-                    'label': pred_dict['pred_labels'].unsqueeze(1),
-                    'probability': pred_dict['pred_probabilities'].unsqueeze(1),
+                    'clip_id': batch['image']['clip_id'][:, -1:] + self.cp,
+                    'coordinate': pred_dict['pred_coordinates'],
+                    'label': pred_dict['pred_labels'],
+                    'probability': pred_dict['pred_probabilities'],
                 }
             }
 

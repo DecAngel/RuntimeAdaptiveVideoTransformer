@@ -41,6 +41,7 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
         super().__init__()
         self.preprocess = preprocess
         self.metric = metric
+        self.infer_implemented = True
 
     def load_from_pth(self, file_path: Union[str, Path]) -> None:
         file_path = Path(file_path)
@@ -48,11 +49,22 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
             state_dict = torch.load(str(file_path), map_location='cpu')
             with contextlib.suppress(NotImplementedError):
                 state_dict = self.pth_adapter(state_dict)
+
+            misshaped_keys = []
+            ssd = self.state_dict()
+            for k in list(state_dict.keys()):
+                if k in ssd and ssd[k].shape != state_dict[k].shape:
+                    misshaped_keys.append(k)
+                    del state_dict[k]
+
             missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
+
             if len(missing_keys) > 0:
                 logger.warning(f'Missing keys in ckpt: {missing_keys}')
             if len(unexpected_keys) > 0:
                 logger.warning(f'Unexpected keys in ckpt: {unexpected_keys}')
+            if len(misshaped_keys) > 0:
+                logger.warning(f'Misshaped keys in ckpt: {unexpected_keys}')
             logger.info(f'File {file_path} loaded!')
         else:
             raise FileNotFoundError(
@@ -85,7 +97,7 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
         raise NotImplementedError()
 
     def inference_impl(self, batch: BatchDict) -> PredDict:
-        return self.forward_impl(batch)
+        raise NotImplementedError()
 
     def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
         if phase == 'environment':
@@ -104,7 +116,14 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
     def inference(self, batch: BatchDict) -> PredDict:
         with torch.inference_mode():
             batch = self.preprocess(batch) if self.preprocess is not None else batch
-            return self.inference_impl(batch)
+            if self.infer_implemented:
+                try:
+                    return self.inference_impl(batch)
+                except NotImplementedError:
+                    self.infer_implemented = False
+                    return self.forward_impl(batch)
+            else:
+                return self.forward_impl(batch)
 
     def training_step(self, batch: BatchDict, *args, **kwargs) -> LossDict:
         loss: LossDict = self.forward(batch)

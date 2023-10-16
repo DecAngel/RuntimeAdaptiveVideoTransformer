@@ -22,3 +22,4 @@ ln -s <your dataset path> ./datasets
 - [x] fix phase init call multiple times 
 - [x] fix random resize
 - [ ] fix ema saving & loading
+- [ ] fix kornia augmentation with different length input

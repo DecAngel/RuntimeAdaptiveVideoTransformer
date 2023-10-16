@@ -21,11 +21,20 @@ from tqdm import tqdm
 from ..sap_strategies import BaseStrategy
 from ..models import BaseSystem
 from f3fusion.configs import dataset_argoverse_dir, output_sap_log_dir
-from f3fusion.utils import remove_pad_along, f3fusion_logger as logger
+from ravt.core.constants import AllConfigs, PhaseTypes
+from ravt.core.base_classes import BaseLauncher, BaseSystem, BaseDataSource, launcher_entry
+from ravt.core.utils.lightning_logger import ravt_logger as logger
+from ravt.core.utils.array_operations import remove_pad_along
+
+from ..base_configs import environment_configs
 
 
 class SAPServer:
-    def __init__(self, sap_factor: float = 1.0):
+    def __init__(self, data_dir: Path, ann_file: Path, output_dir: Path, sap_factor: float = 1.0):
+        super().__init__()
+        self.data_dir = data_dir
+        self.ann_file = ann_file
+        self.output_dir = output_dir
         self.sap_factor = sap_factor
         self.config_path: Optional[Path] = None
         self.proc: Optional[subprocess.Popen] = None
@@ -51,24 +60,23 @@ class SAPServer:
             "result_service_port": p2,
             "loopback_ip": "127.0.0.1"
         }
-        self.config_path = output_sap_log_dir.joinpath(f'{p1}_{p2}.json')
+        self.config_path = self.output_dir.joinpath(f'{p1}_{p2}.json')
         self.config_path.write_text(json.dumps(config))
 
         # start server
         self.proc = subprocess.Popen(
             ' '.join([
                 'python', '-m', 'sap_toolkit.server',
-                '--data-root', f'{str(dataset_argoverse_dir.joinpath("Argoverse-1.1", "tracking").resolve())}',
-                '--annot-path',
-                f'{str(dataset_argoverse_dir.joinpath("Argoverse-HD", "annotations", "val.json").resolve())}',
+                '--data-root', f'{str(self.data_dir.resolve())}',
+                '--annot-path', f'{str(self.ann_file.resolve())}',
                 '--overwrite',
                 '--eval-config', f'{str(self.config_path.resolve())}',
-                '--out-dir', f'{str(output_sap_log_dir.resolve())}',
+                '--out-dir', f'{str(self.output_dir.resolve())}',
                 '--perf-factor', str(self.sap_factor),
             ]),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            cwd=str(output_sap_log_dir.resolve()),
+            cwd=str(self.output_dir.resolve()),
             shell=True,
             text=True,
         )
@@ -107,6 +115,9 @@ class SAPClient(EvalClient):
         self.result_channel.close()
         self.existing_shm.close()
         self.results_shm.close()
+
+
+class SAPLauncher(BaseLauncher):
 
 
 def run_sap(

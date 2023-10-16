@@ -19,9 +19,11 @@ class DFPMIN(nn.Module):
             for f in in_channels
         ])
 
-    def forward(self, features: Tuple[PYRAMID, PYRAMID]) -> PYRAMID:
-        f0, f1 = features
+    def forward(self, features: PYRAMID) -> PYRAMID:
+        B, T, _, _, _ = features[0].size()
+        assert T == 2
+        f0, f1 = [[f[:, t] for f in features] for t in range(T)]
         f2 = []
         for i in range(len(f0)):
-            f2.append(f1[i] + self.convs[i](f1[i]) - self.convs[i](f0[i]))
+            f2.append((f1[i] + self.convs[i](f1[i]) - self.convs[i](f0[i])).unsqueeze(1))
         return tuple(f2)

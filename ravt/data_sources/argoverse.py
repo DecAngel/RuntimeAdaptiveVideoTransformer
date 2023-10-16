@@ -195,7 +195,7 @@ class ArgoverseDataSource(BaseDataSource):
             enable_cache: bool = True,
     ):
         """Dataset instances should avoid storing native list or dict!!!"""
-        super().__init__()
+        super().__init__((1200, 1920))
         self.size = size
         self.max_objs = max_objs
         self.client = SharedMemoryClient() if enable_cache else None
@@ -253,6 +253,7 @@ class ArgoverseDataSource(BaseDataSource):
     def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
         if phase == 'dataset':
             self.dataset_dir = configs['environment']['dataset_dir']
+            configs['extra']['image_dir'] = self.img_dir
             configs['extra']['train_coco_file'] = self.ann_train_file
             configs['extra']['eval_coco_file'] = self.ann_eval_file
             configs['extra']['test_coco_file'] = self.ann_test_file

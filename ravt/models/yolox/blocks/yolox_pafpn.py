@@ -78,9 +78,12 @@ class YOLOXPAFPNBackbone(nn.Module):
     def forward(
             self, image: IMAGE,
     ) -> PYRAMID:
-        """ Extract the FPN feature (p3, p4, p5) of an image tensor of (b, 3, h, w)
+        """ Extract the FPN feature (p3, p4, p5) of an image tensor of (b, t, 3, h, w)
 
         """
+        B, T, C, H, W = image.size()
+        image = image.flatten(0, 1)
+
         feature = self.backbone(image)
         f3, f4, f5 = list(feature[f_name] for f_name in self.feature_names)
 
@@ -108,4 +111,4 @@ class YOLOXPAFPNBackbone(nn.Module):
         x = self.up_csp_4_5(x)
         p5 = x
 
-        return p3, p4, p5
+        return p3.unflatten(0, (B, T)), p4.unflatten(0, (B, T)), p5.unflatten(0, (B, T))

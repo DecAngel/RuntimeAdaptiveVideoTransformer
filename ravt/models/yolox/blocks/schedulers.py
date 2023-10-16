@@ -14,7 +14,7 @@ class MSCAScheduler(torch.optim.lr_scheduler.LambdaLR):
     def __init__(self, optimizer: torch.optim.Optimizer, exp_steps: int, last_epoch=-1):
         def lr(steps: int) -> float:
             steps_warmup = exp_steps
-            steps_1 = exp_steps * 5
+            steps_1 = exp_steps * 3
             steps_2 = exp_steps * 10
             if steps < steps_warmup:
                 return steps / steps_warmup

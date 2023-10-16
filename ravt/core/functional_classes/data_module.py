@@ -39,7 +39,7 @@ class WrapperClipDataset(Dataset):
         batch: BatchDict = {}
         for key, value in self.required_keys.items():
             batch[key] = default_collate([
-                self.data_source.get_component(self.subset, key, seq_id, frame_id + i)
+                {**self.data_source.get_component(self.subset, key, seq_id, frame_id + i), 'clip_id': i}
                 for i in value
             ])
         return batch
