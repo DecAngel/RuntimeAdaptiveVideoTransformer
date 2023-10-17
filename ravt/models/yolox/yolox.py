@@ -187,7 +187,10 @@ class YOLOXSystem(BaseSystem):
 
     def configure_optimizers(self):
         p_bias, p_norm, p_weight = [], [], []
-        for k, v in self.named_modules():
+        all_parameters = []
+        all_parameters.extend(self.backbone.named_modules())
+        all_parameters.extend(self.head.named_modules())
+        for k, v in all_parameters:
             if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
                 p_bias.append(v.bias)
             if isinstance(v, nn.BatchNorm2d) or 'bn' in k:

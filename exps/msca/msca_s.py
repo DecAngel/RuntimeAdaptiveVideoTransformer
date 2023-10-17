@@ -20,7 +20,7 @@ torch.set_float32_matmul_precision('high')
 
 
 def main(
-        exp_tag: str, past_time_constant: str, future_time_constant: str,
+        exp_tag: str, past_time_constant: List[int], future_time_constant: List[int],
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
     """ Train and test msca_s model on Argoverse-HD
@@ -38,8 +38,8 @@ def main(
     num_workers = 0 if debug else 8
     data_source = ArgoverseDataSource()
     model = msca_s(
-        past_time_constant=[int(c) for c in past_time_constant.split(',')],
-        future_time_constant=[int(c) for c in future_time_constant.split(',')],
+        past_time_constant=past_time_constant,
+        future_time_constant=future_time_constant,
         neck_type='ta',
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),

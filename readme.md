@@ -16,6 +16,11 @@ python -m pip install -r requirements_others.txt
 cd <ravt dir>
 ln -s <your dataset path> ./datasets
 ```
+- use yolox cocoeval
+```shell
+cd <ravt dir>
+chmod +x ./ravt/ninja
+```
 
 ## TODO
 - [x] implement 3d attention

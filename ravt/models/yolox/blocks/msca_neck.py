@@ -441,7 +441,6 @@ class Simple2Block(nn.Module):
         TF = future_time_constant.size(0)
 
         feature_p = self.conv_p(feature.flatten(0, 1)).unflatten(0, (B, TP + 1))    # B TP C H W
-        # feature_p = feature_p[:, -1:] - feature_p[:, :-1]                           # B TP C H W
         feature_f = feature[:, -1:].expand(-1, TF, -1, -1, -1)                      # B TF C H W
         ptc = self.fc_time_constant(past_time_constant[:, None])[None, :, :]        # 1 TP C
         ftc = self.fc_time_constant(future_time_constant[:, None])[None, :, :]      # 1 TF C
