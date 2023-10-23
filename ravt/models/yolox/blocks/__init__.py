@@ -5,5 +5,4 @@ from .dfp_min import DFPMIN
 from .yolox_head import YOLOXHead
 from .tal_head import TALHead
 from .schedulers import StreamYOLOScheduler, MSCAScheduler
-from .msca_neck import MSCANeck, SimpleNeck, Simple2Neck, Simple3Neck
-from .ta_neck import TANeck
+from .ta_neck import TANeck, TA5Neck

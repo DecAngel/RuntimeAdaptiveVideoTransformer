@@ -21,6 +21,7 @@ torch.set_float32_matmul_precision('high')
 
 def main(
         exp_tag: str, past_time_constant: List[int], future_time_constant: List[int],
+        neck_type: Literal['ta', 'ta5'] = 'ta',
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
     """ Train and test msca_s model on Argoverse-HD
@@ -28,6 +29,7 @@ def main(
     :param exp_tag: the tag for the experiment
     :param past_time_constant:
     :param future_time_constant:
+    :param neck_type:
     :param batch_size: batch size of the exp, set None to auto-detect
     :param device_id: the cuda device id to place the model on
     :param visualize: enable visualization
@@ -40,7 +42,7 @@ def main(
     model = msca_s(
         past_time_constant=past_time_constant,
         future_time_constant=future_time_constant,
-        neck_type='ta',
+        neck_type=neck_type,
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
         momentum=0.9,

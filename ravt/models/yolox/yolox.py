@@ -1,5 +1,7 @@
-from typing import Optional, Union, Dict, Tuple, Literal
+from typing import Optional, Union, Dict, Tuple, Literal, List
 
+import cv2
+import numpy as np
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
@@ -12,6 +14,7 @@ from ravt.core.constants import (
     BatchDict, PredDict, LossDict, BatchKeys,
 )
 from ravt.core.base_classes import BaseSystem
+from ravt.core.utils.array_operations import clip_or_pad_along
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
@@ -184,6 +187,22 @@ class YOLOXSystem(BaseSystem):
                     'probability': pred_dict['pred_probabilities'],
                 }
             }
+
+    def inference_impl(
+            self, image: np.ndarray, buffer: Optional[Dict], past_time_constant: List[int],
+            future_time_constant: List[int]
+    ) -> Tuple[np.ndarray, Dict]:
+        image = cv2.resize(image, (960, 600))
+        images = torch.from_numpy(image).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+
+        features = self.backbone(images)
+        pred_dict = self.head(features, shape=images.shape[-2:])
+
+        return clip_or_pad_along(np.concatenate([
+            pred_dict['pred_coordinates'].cpu().numpy()[0, 0],
+            pred_dict['pred_probabilities'].cpu().numpy()[0, 0, :, None],
+            pred_dict['pred_labels'].cpu().numpy()[0, 0, :, None].astype(float),
+        ], axis=1), axis=0, fixed_length=50, pad_value=0.0), {}
 
     def configure_optimizers(self):
         p_bias, p_norm, p_weight = [], [], []

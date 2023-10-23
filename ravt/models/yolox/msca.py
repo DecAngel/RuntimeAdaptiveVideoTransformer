@@ -1,12 +1,14 @@
 from typing import Optional, Dict, Tuple, Literal, Union, List
 
+import cv2
+import numpy as np
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch import nn
 
 from .blocks import (
-    YOLOXPAFPNBackbone, TALHead, MSCAScheduler, StreamYOLOScheduler, TANeck, YOLOXHead
+    YOLOXPAFPNBackbone, TALHead, MSCAScheduler, StreamYOLOScheduler, TANeck, YOLOXHead, TA5Neck
 )
 from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
@@ -15,6 +17,7 @@ from ravt.core.constants import (
 )
 from ravt.core.base_classes import BaseSystem
 from ravt.core.utils.lightning_logger import ravt_logger as logger
+from ...core.utils.array_operations import clip_or_pad_along
 
 
 class MSCASystem(BaseSystem):
@@ -30,7 +33,7 @@ class MSCASystem(BaseSystem):
             act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
             num_classes: int = 8,
             max_objs: int = 100,
-            neck_type: Literal['ta'] = 'ta',
+            neck_type: Literal['ta', 'ta5'] = 'ta',
 
             # predict parameters
             past_time_constant: List[int] = None,
@@ -98,6 +101,12 @@ class MSCASystem(BaseSystem):
                 self.hparams.past_time_constant,
                 self.hparams.future_time_constant,
             )
+        elif neck_type == 'ta5':
+            self.neck = TA5Neck(
+                in_channels,
+                self.hparams.past_time_constant,
+                self.hparams.future_time_constant,
+            )
         else:
             raise ValueError(f'Unsupported neck_type: {neck_type}')
         self.head = TALHead(**self.hparams)
@@ -124,7 +133,7 @@ class MSCASystem(BaseSystem):
     def example_input_array(self) -> Tuple[BatchDict]:
         b = 2
         p = len(self.hparams.past_time_constant) + 1
-        f = p + len(self.hparams.future_time_constant)
+        f = len(self.hparams.future_time_constant) + 1
         return {
             'image': {
                 'image_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
@@ -135,13 +144,13 @@ class MSCASystem(BaseSystem):
                 'original_size': torch.ones(b, p, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
             'bbox': {
-                'image_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
-                'seq_id': torch.ones(b, p, dtype=torch.int32),
-                'frame_id': torch.arange(0, b*p, dtype=torch.int32).reshape(b, p),
-                'clip_id': torch.arange(p, f, dtype=torch.int32).unsqueeze(0).expand(b, -1),
-                'coordinate': torch.zeros(b, p, 100, 4, dtype=torch.float32),
-                'label': torch.zeros(b, p, 100, dtype=torch.int32),
-                'probability': torch.zeros(b, p, 100, dtype=torch.float32),
+                'image_id': torch.arange(0, b*f, dtype=torch.int32).reshape(b, f),
+                'seq_id': torch.ones(b, f, dtype=torch.int32),
+                'frame_id': torch.arange(0, b*f, dtype=torch.int32).reshape(b, f),
+                'clip_id': torch.arange(p, p+f-1, dtype=torch.int32).unsqueeze(0).expand(b, -1),
+                'coordinate': torch.zeros(b, f, 100, 4, dtype=torch.float32),
+                'label': torch.zeros(b, f, 100, dtype=torch.int32),
+                'probability': torch.zeros(b, f, 100, dtype=torch.float32),
             }
         },
 
@@ -173,9 +182,7 @@ class MSCASystem(BaseSystem):
         }
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
-        s = self.state_dict()
         new_ckpt = {}
-        shape_mismatches = []
         for k, v in state_dict['model'].items():
             k = k.replace('lateral_conv0', 'down_conv_5_4')
             k = k.replace('C3_p4', 'down_csp_4_4')
@@ -188,12 +195,7 @@ class MSCASystem(BaseSystem):
             k = k.replace('backbone.jian2', 'neck.convs.0')
             k = k.replace('backbone.jian1', 'neck.convs.1')
             k = k.replace('backbone.jian0', 'neck.convs.2')
-            if k in s and s[k].shape != v.shape:
-                shape_mismatches.append(k)
-            else:
-                new_ckpt[k] = v
-        if len(shape_mismatches) > 0:
-            logger.warning(f'Ignoring params with mismatched shape: {shape_mismatches}')
+            new_ckpt[k] = v
         return new_ckpt
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
@@ -225,22 +227,76 @@ class MSCASystem(BaseSystem):
                 }
             }
 
+    def inference_impl(
+            self, image: np.ndarray, buffer: Optional[Dict], past_time_constant: List[int],
+            future_time_constant: List[int]
+    ) -> Tuple[np.ndarray, Dict]:
+        image = cv2.resize(image, (960, 600))
+        images = torch.from_numpy(image).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+
+        features = self.backbone(images)
+
+        if buffer is None or 'prev_features' not in buffer:
+            new_buffer = {
+                'prev_indices': [-1],
+                'prev_features': features,
+            }
+        else:
+            past_time_constant = [i for i in past_time_constant if i in buffer['prev_indices']]
+            past_time_indices = [idx for idx, i in enumerate(buffer['prev_indices']) if i in past_time_constant]
+            prev_features = buffer['prev_features'][past_time_indices]
+
+            new_buffer = {
+                'prev_indices': [i-1 for i in past_time_constant] + [-1],
+                'prev_features': torch.cat([*prev_features, features], dim=1),
+            }
+            features = self.neck(new_buffer['prev_features'], past_time_constant, future_time_constant)
+
+        pred_dict = self.head(features, shape=images.shape[-2:])
+
+        return clip_or_pad_along(np.concatenate([
+            pred_dict['pred_coordinates'].cpu().numpy()[0, 0],
+            pred_dict['pred_probabilities'].cpu().numpy()[0, 0, :, None],
+            pred_dict['pred_labels'].cpu().numpy()[0, 0, :, None].astype(float),
+        ], axis=1), axis=0, fixed_length=50, pad_value=0.0), new_buffer
+
     def configure_optimizers(self):
-        p_bias, p_norm, p_weight = [], [getattr(self.neck, 'attn_weight_ta')], []
+        p_normal, p_wd, p_normal_lr, p_wd_lr, p_add = [], [], [], [], []
         all_parameters = []
-        all_parameters.extend(self.backbone.named_modules())
-        all_parameters.extend(self.neck.named_modules())
-        all_parameters.extend(self.head.named_modules())
+        all_parameters.extend(self.backbone.named_modules(prefix='backbone'))
+        all_parameters.extend(self.neck.named_modules(prefix='neck'))
+        all_parameters.extend(self.head.named_modules(prefix='head'))
         for k, v in all_parameters:
             if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
-                p_bias.append(v.bias)
-            if isinstance(v, nn.BatchNorm2d) or 'bn' in k:
-                p_norm.append(v.weight)
+                if 'neck' in k or 'head' in k:
+                    p_normal_lr.append(v.bias)
+                else:
+                    p_normal.append(v.bias)
+            if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)) or 'bn' in k:
+                if 'neck' in k or 'head' in k:
+                    p_normal_lr.append(v.weight)
+                else:
+                    p_normal.append(v.weight)
             elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
-                p_weight.append(v.weight)  # apply decay
-        optimizer = torch.optim.SGD(p_norm, lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True)
-        optimizer.add_param_group({"params": p_weight, "weight_decay": self.hparams.weight_decay})
-        optimizer.add_param_group({"params": p_bias})
+                if 'neck' in k or 'head' in k:
+                    p_wd_lr.append(v.weight)
+                else:
+                    p_wd.append(v.weight)  # apply decay
+            # neck
+            if self.hparams.neck_type == 'ta' and hasattr(v, 'attn_weight_ta'):
+                p_add.append(v.attn_weight_ta)
+            elif self.hparams.neck_type == 'ta5' and hasattr(v, 'p_attn'):
+                p_add.append(v.p_attn)
+        optimizer = torch.optim.SGD(
+            [
+                {'params': p_normal},
+                {'params': p_wd, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_normal_lr, 'lr': self.hparams.lr*5},
+                {'params': p_wd_lr, 'lr': self.hparams.lr*5, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_add, 'lr': self.hparams.lr*30}
+            ],
+            lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True
+        )
         scheduler = StreamYOLOScheduler(optimizer, int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs))
 
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
@@ -258,7 +314,7 @@ def msca_s(
         depthwise: bool = False,
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
-        neck_type: Literal['ta'] = 'ta',
+        neck_type: Literal['ta', 'ta5'] = 'ta',
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
         lr: float = 0.001,

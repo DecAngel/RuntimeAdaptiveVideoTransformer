@@ -1,5 +1,7 @@
-from typing import Optional, Dict, Tuple, Literal, Union
+from typing import Optional, Dict, Tuple, Literal, Union, List
 
+import cv2
+import numpy as np
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
@@ -12,6 +14,7 @@ from ravt.core.constants import (
     BatchDict, PredDict, LossDict, BatchKeys,
 )
 from ravt.core.base_classes import BaseSystem
+from ravt.core.utils.array_operations import clip_or_pad_along
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
@@ -147,9 +150,7 @@ class StreamYOLOSystem(BaseSystem):
         }
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
-        s = self.state_dict()
         new_ckpt = {}
-        shape_mismatches = []
         for k, v in state_dict['model'].items():
             k = k.replace('lateral_conv0', 'down_conv_5_4')
             k = k.replace('C3_p4', 'down_csp_4_4')
@@ -162,12 +163,7 @@ class StreamYOLOSystem(BaseSystem):
             k = k.replace('backbone.jian2', 'neck.convs.0')
             k = k.replace('backbone.jian1', 'neck.convs.1')
             k = k.replace('backbone.jian0', 'neck.convs.2')
-            if k in s and s[k].shape != v.shape:
-                shape_mismatches.append(k)
-            else:
-                new_ckpt[k] = v
-        if len(shape_mismatches) > 0:
-            logger.warning(f'Ignoring params with mismatched shape: {shape_mismatches}')
+            new_ckpt[k] = v
         return new_ckpt
 
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
@@ -198,6 +194,25 @@ class StreamYOLOSystem(BaseSystem):
                     'probability': pred_dict['pred_probabilities'],
                 }
             }
+
+    def inference_impl(
+            self, image: np.ndarray, buffer: Optional[Dict], past_time_constant: List[int],
+            future_time_constant: List[int]
+    ) -> Tuple[np.ndarray, Dict]:
+        image = cv2.resize(image, (960, 600))
+        images = torch.from_numpy(image).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+
+        features = self.backbone(images)
+        new_buffer = {'prev_features': features}
+        if buffer is not None and 'prev_features' in buffer:
+            features = self.neck(torch.cat([buffer['prev_features'], features], dim=1))
+        pred_dict = self.head(features, shape=images.shape[-2:])
+
+        return clip_or_pad_along(np.concatenate([
+            pred_dict['pred_coordinates'].cpu().numpy()[0, 0],
+            pred_dict['pred_probabilities'].cpu().numpy()[0, 0, :, None],
+            pred_dict['pred_labels'].cpu().numpy()[0, 0, :, None].astype(float),
+        ], axis=1), axis=0, fixed_length=50, pad_value=0.0), new_buffer
 
     def configure_optimizers(self):
         p_bias, p_norm, p_weight = [], [], []

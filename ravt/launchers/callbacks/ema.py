@@ -114,6 +114,26 @@ class EMACallback(Callback):
             self.copy_to(self.ema.module.parameters(), pl_module.parameters())
             logger.info("End of training. Model weights replaced with the EMA version.")
 
+    def on_save_checkpoint(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", checkpoint: Dict[str, Any]
+    ) -> None:
+        if self.ema is not None:
+            checkpoint['callbacks'][self.__class__.__name__] = {'state_dict_ema_train': pl_module.state_dict()}
+            checkpoint['state_dict'] = self.ema.module.state_dict()
+
+    def on_load_checkpoint(
+        self, trainer: "pl.Trainer", pl_module: "pl.LightningModule", checkpoint: Dict[str, Any]
+    ) -> None:
+        if self.ema is not None:
+            train_params = checkpoint['callbacks'][self.__class__.__name__]['state_dict_ema_train']
+            eval_params = checkpoint['state_dict']
+            if trainer.training:
+                pl_module.load_state_dict(train_params)
+            else:
+                pl_module.load_state_dict(eval_params)
+            self.ema.module.load_state_dict(eval_params)
+
+    """
     def state_dict(self) -> Dict[str, Any]:
         if self.ema is not None:
             return {"state_dict_ema": get_state_dict(self.ema, unwrap_model)}
@@ -121,6 +141,7 @@ class EMACallback(Callback):
     def load_state_dict(self, state_dict: Dict[str, Any]) -> None:
         if self.ema is not None:
             self.ema.module.load_state_dict(state_dict["state_dict_ema"])
+    """
 
     def store(self, parameters):
         "Save the current parameters for restoring later."

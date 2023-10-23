@@ -1,7 +1,8 @@
 import contextlib
 from pathlib import Path
-from typing import Union, Tuple, List, Optional, Dict
+from typing import Union, Tuple, List, Optional, Dict, Callable
 
+import numpy as np
 import pytorch_lightning as pl
 import torch
 from torch import nn
@@ -93,10 +94,13 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
     def forward_impl(self, batch: BatchDict) -> Union[PredDict, LossDict]:
         raise NotImplementedError()
 
-    def configure_optimizers(self) -> Tuple[List[Optimizer], List[LRScheduler]]:
+    def inference_impl(
+            self, image: np.ndarray, buffer: Optional[Dict],
+            past_time_constant: List[int], future_time_constant: List[int],
+    ) -> Tuple[np.ndarray, Dict]:
         raise NotImplementedError()
 
-    def inference_impl(self, batch: BatchDict) -> PredDict:
+    def configure_optimizers(self) -> Tuple[List[Optimizer], List[LRScheduler]]:
         raise NotImplementedError()
 
     def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
@@ -113,17 +117,12 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
         with context:
             return self.forward_impl(batch)
 
-    def inference(self, batch: BatchDict) -> PredDict:
+    def inference(
+            self, image: np.ndarray, buffer: Optional[Dict],
+            past_time_constant: List[int], future_time_constant: List[int],
+    ) -> Tuple[np.ndarray, Dict]:
         with torch.inference_mode():
-            batch = self.preprocess(batch) if self.preprocess is not None else batch
-            if self.infer_implemented:
-                try:
-                    return self.inference_impl(batch)
-                except NotImplementedError:
-                    self.infer_implemented = False
-                    return self.forward_impl(batch)
-            else:
-                return self.forward_impl(batch)
+            return self.inference_impl(image, buffer, past_time_constant, future_time_constant)
 
     def training_step(self, batch: BatchDict, *args, **kwargs) -> LossDict:
         loss: LossDict = self.forward(batch)

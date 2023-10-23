@@ -26,5 +26,5 @@ chmod +x ./ravt/ninja
 - [x] implement 3d attention
 - [x] fix phase init call multiple times 
 - [x] fix random resize
-- [ ] fix ema saving & loading
-- [ ] fix kornia augmentation with different length input
+- [x] fix ema saving & loading
+- [x] fix kornia augmentation with different length input

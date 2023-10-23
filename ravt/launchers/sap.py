@@ -13,16 +13,14 @@ from typing import Optional, Type, Tuple
 import cv2
 import numpy as np
 import torch
+import pytorch_lightning as pl
 from pycocotools.coco import COCO
 from sap_toolkit.client import EvalClient
 from sap_toolkit.generated import eval_server_pb2
 from tqdm import tqdm
 
-from ..sap_strategies import BaseStrategy
-from ..models import BaseSystem
-from f3fusion.configs import dataset_argoverse_dir, output_sap_log_dir
 from ravt.core.constants import AllConfigs, PhaseTypes
-from ravt.core.base_classes import BaseLauncher, BaseSystem, BaseDataSource, launcher_entry
+from ravt.core.base_classes import BaseLauncher, BaseSystem, BaseDataSource, launcher_entry, BaseSAPStrategy
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 from ravt.core.utils.array_operations import remove_pad_along
 
@@ -118,6 +116,25 @@ class SAPClient(EvalClient):
 
 
 class SAPLauncher(BaseLauncher):
+    def __init__(
+            self, model: BaseSystem, data_source: BaseDataSource, sap_strategy: BaseSAPStrategy,
+            envs: Optional[AllConfigs] = None,
+            device_id: Optional[int] = None,
+            debug: bool = __debug__,
+            seed: Optional[int] = None,
+    ):
+        super().__init__(envs or environment_configs)
+        self.model = model.eval().to(torch.device(f'cuda:{device_id or 0}'))
+        self.data_source = data_source
+        self.sap_strategy = sap_strategy
+        self.device_id = device_id or 0
+        self.debug = debug
+        self.seed = pl.seed_everything(seed)
+
+    @launcher_entry
+    def test_sap(self, sap_factor: float = 1.0, dataset_fps: int = 30):
+        if platform.system() != 'Linux':
+            raise EnvironmentError('sAP evaluation is only supported on Linux!')
 
 
 def run_sap(

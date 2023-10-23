@@ -94,7 +94,15 @@ class KorniaAugmentation(BaseTransform):
             coordinates = coordinates[..., [0, 1, 2, 1, 2, 3, 0, 3]].reshape(b, t, o, 4, 2)
             inputs.append(coordinates)
 
-        outputs = transform(*inputs)
+        max_time = max([i.size(1) for i in inputs])
+        difference_time = [max_time - i.size(1) for i in inputs]
+        for i, d in enumerate(difference_time):
+            if d > 0:
+                inputs[i] = torch.cat([inputs[i], inputs[i][:, [0]*d]], dim=1)
+        outputs = list(transform(*inputs))
+        for i, d in enumerate(difference_time):
+            if d > 0:
+                outputs[i] = outputs[i][:, :-d]
 
         if 'image' in input_keys:
             batch['image']['image'] = (outputs[0] * self.c255).type(torch.uint8)

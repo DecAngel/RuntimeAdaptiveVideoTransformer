@@ -111,6 +111,7 @@ class TrainTestLauncher(BaseLauncher):
 
         if ckpt_path is not None:
             d = torch.load(ckpt_path)
+            """
             if self.callback_ema is not None:
                 # load ema state dict
                 logger.info(f'load ema state dict from {ckpt_path}')
@@ -118,6 +119,9 @@ class TrainTestLauncher(BaseLauncher):
             else:
                 logger.info(f'load state dict from {ckpt_path}')
                 self.model.load_state_dict(d['state_dict'])
+            """
+            logger.info(f'load state dict from {ckpt_path}')
+            self.model.load_state_dict(d['state_dict'])
 
     @launcher_entry({'internal': {'stage': 'fit'}})
     def train(self, resume: Union[Path, str, Literal['last', 'best'], None]) -> TypedDict('TrainResult', {'eval_mAP': float}):
