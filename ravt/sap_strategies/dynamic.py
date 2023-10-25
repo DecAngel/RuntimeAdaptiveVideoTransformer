@@ -32,7 +32,7 @@ class DynamicSchedulingStrategy(BaseSAPStrategy):
                 if runtime_mean < np.floor(runtime_remainder + runtime_mean):
                     continue
 
-            res, buffer = process_fn(frame, buffer, [-1], [1])
+            res, buffer = process_fn(frame, buffer, [-3, -2, -1], [1])
             output_fn(res)
 
             runtime_current = time_fn() - start_fid

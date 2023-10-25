@@ -228,30 +228,37 @@ class MSCASystem(BaseSystem):
             }
 
     def inference_impl(
-            self, image: np.ndarray, buffer: Optional[Dict], past_time_constant: List[int],
-            future_time_constant: List[int]
+            self, image: np.ndarray, buffer: Optional[Dict] = None,
+            past_time_constant: Optional[List[int]] = None, future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, Dict]:
+        past_time_constant = past_time_constant or [-1]
+        future_time_constant = future_time_constant or [1]
+
         image = cv2.resize(image, (960, 600))
-        images = torch.from_numpy(image).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
 
         features = self.backbone(images)
 
         if buffer is None or 'prev_features' not in buffer:
             new_buffer = {
                 'prev_indices': [-1],
-                'prev_features': features,
+                'prev_features': [features],
             }
         else:
             past_time_constant = [i for i in past_time_constant if i in buffer['prev_indices']]
             past_time_indices = [idx for idx, i in enumerate(buffer['prev_indices']) if i in past_time_constant]
-            prev_features = buffer['prev_features'][past_time_indices]
+            prev_features = [buffer['prev_features'][idx] for idx in past_time_indices]
 
             new_buffer = {
                 'prev_indices': [i-1 for i in past_time_constant] + [-1],
-                'prev_features': torch.cat([*prev_features, features], dim=1),
+                'prev_features': prev_features + [features],
             }
-            features = self.neck(new_buffer['prev_features'], past_time_constant, future_time_constant)
-
+            features = self.neck(
+                tuple(
+                    torch.cat([f[i] for f in new_buffer['prev_features']], dim=1)
+                    for i in range(len(features))
+                ), past_time_constant, future_time_constant
+            )
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([

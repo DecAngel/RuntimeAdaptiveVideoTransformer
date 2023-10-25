@@ -95,8 +95,8 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
         raise NotImplementedError()
 
     def inference_impl(
-            self, image: np.ndarray, buffer: Optional[Dict],
-            past_time_constant: List[int], future_time_constant: List[int],
+            self, image: np.ndarray, buffer: Optional[Dict] = None,
+            past_time_constant: Optional[List[int]] = None, future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, Dict]:
         raise NotImplementedError()
 
@@ -118,11 +118,12 @@ class BaseSystem(PhaseInitMixin, pl.LightningModule):
             return self.forward_impl(batch)
 
     def inference(
-            self, image: np.ndarray, buffer: Optional[Dict],
-            past_time_constant: List[int], future_time_constant: List[int],
+            self, image: np.ndarray, buffer: Optional[Dict] = None,
+            past_time_constant: Optional[List[int]] = None, future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, Dict]:
         with torch.inference_mode():
-            return self.inference_impl(image, buffer, past_time_constant, future_time_constant)
+            res, buffer = self.inference_impl(image, buffer, past_time_constant, future_time_constant)
+            return res, buffer
 
     def training_step(self, batch: BatchDict, *args, **kwargs) -> LossDict:
         loss: LossDict = self.forward(batch)

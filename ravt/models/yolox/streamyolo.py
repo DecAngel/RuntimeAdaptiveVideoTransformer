@@ -196,16 +196,18 @@ class StreamYOLOSystem(BaseSystem):
             }
 
     def inference_impl(
-            self, image: np.ndarray, buffer: Optional[Dict], past_time_constant: List[int],
-            future_time_constant: List[int]
+            self, image: np.ndarray, buffer: Optional[Dict] = None,
+            past_time_constant: Optional[List[int]] = None, future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[np.ndarray, Dict]:
         image = cv2.resize(image, (960, 600))
-        images = torch.from_numpy(image).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
 
         features = self.backbone(images)
         new_buffer = {'prev_features': features}
         if buffer is not None and 'prev_features' in buffer:
-            features = self.neck(torch.cat([buffer['prev_features'], features], dim=1))
+            features = self.neck(tuple(torch.cat([bf, f], dim=1) for bf, f in zip(buffer['prev_features'], features)))
+        else:
+            features = self.neck(tuple(torch.cat([f, f], dim=1) for f in features))
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([

@@ -25,7 +25,7 @@ class TimeRecorder:
 
     def __str__(self):
         return f'{self.description} total time: {round(self.last_time - self.start_time, 4)}s\n\t' + \
-               '\t'.join([f'{k}: {np.round(self.reduce_fn(v), 4).item()}s\n' for k, v in self.t.items()])
+               '\t'.join([f'{k}: {np.round(self.reduce_fn(v), 4).item()}s, {len(v)} times\n' for k, v in self.t.items()])
 
     def _start(self):
         self.start_time = time.time()

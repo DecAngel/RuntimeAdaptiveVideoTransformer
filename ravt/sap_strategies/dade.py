@@ -1,31 +1,34 @@
 import math
-from typing import Callable
+from typing import Callable, Tuple, Dict, Optional, List
 
-from .base import BaseStrategy
-from f3fusion.utils.time_recorder import TimeRecorder
+import numpy as np
+from ravt.core.base_classes import BaseSAPStrategy
 
 
-class DadeSchedulingStrategy(BaseStrategy):
-    def infer_sequence(self, frame_continuous_fn: Callable[[], float]):
-        with TimeRecorder(description=self.__class__.__name__, mode='avg') as tr:
-            current_fid = -1
-            last_runtime = 1
-            self.system.predict_nums = [1]
-            while True:
-                fid, frame = self.recv_fn()
-                if fid is None:
-                    break
-                elif fid == current_fid:
-                    continue
-
+class DadeSchedulingStrategy(BaseSAPStrategy):
+    def infer_sequence(
+            self,
+            input_fn: Callable[[], Tuple[Optional[int], np.ndarray]],
+            process_fn: Callable[[np.ndarray, Optional[Dict], List[int], List[int]], Tuple[np.ndarray, Dict]],
+            output_fn: Callable[[np.ndarray], None],
+            time_fn: Callable[[], float],
+    ):
+        current_fid = -1
+        buffer = None
+        last_runtime = 1
+        while True:
+            fid, frame = input_fn()
+            if fid is None:
+                break
+            elif fid == current_fid:
+                continue
+            else:
                 current_fid = fid
-                start_fid = frame_continuous_fn()
-                predict_num = min(4, max(1, math.ceil(last_runtime)))
 
-                self.system.predict_nums = [predict_num]
-                tr.record('recv')
-                res = self.system.infer(frame, fid == 0)
-                tr.record('infer')
-                self.send_fn(res[-1].array)
-                last_runtime = frame_continuous_fn() - start_fid
-                tr.record('send')
+            start_fid = time_fn()
+            predict_num = min(4, max(1, math.ceil(last_runtime)))
+
+            res, buffer = process_fn(frame, buffer, [-3, -2, -1], [predict_num])
+            output_fn(res)
+
+            last_runtime = time_fn() - start_fid

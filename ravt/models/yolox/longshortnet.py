@@ -1,4 +1,4 @@
-from typing import Optional, Union, Dict, Tuple, Literal, List
+from typing import Optional, Dict, Tuple, Literal, Union, List
 
 import cv2
 import numpy as np
@@ -7,7 +7,7 @@ import kornia.augmentation as ka
 from jaxtyping import Float, Int
 from torch import nn
 
-from .blocks import YOLOXPAFPNBackbone, YOLOXHead, StreamYOLOScheduler
+from .blocks import YOLOXPAFPNBackbone, LongShortNeck, TALHead, StreamYOLOScheduler
 from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 from ravt.core.constants import (
@@ -18,7 +18,7 @@ from ravt.core.utils.array_operations import clip_or_pad_along
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 
-class YOLOXSystem(BaseSystem):
+class LongShortNetSystem(BaseSystem):
     def __init__(
             self,
             # structural parameters
@@ -33,7 +33,7 @@ class YOLOXSystem(BaseSystem):
             max_objs: int = 100,
 
             # predict parameters
-            predict_num: int = 0,
+            predict_num: int = 1,
 
             # postprocess parameters
             conf_thre: float = 0.01,
@@ -83,7 +83,8 @@ class YOLOXSystem(BaseSystem):
         self.save_hyperparameters(ignore=['kwargs'])
 
         self.backbone = YOLOXPAFPNBackbone(**self.hparams)
-        self.head = YOLOXHead(**self.hparams)
+        self.neck = LongShortNeck(**self.hparams)
+        self.head = TALHead(**self.hparams)
         self.register_buffer('cp', tensor=torch.tensor(self.hparams.predict_num, dtype=torch.int32), persistent=False)
 
         def init_yolo(M):
@@ -98,18 +99,18 @@ class YOLOXSystem(BaseSystem):
     def example_input_array(self) -> Tuple[BatchDict]:
         return {
             'image': {
-                'image_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'seq_id': torch.ones(4, 1, dtype=torch.int32),
-                'frame_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'clip_id': torch.arange(0, 1, dtype=torch.int32).unsqueeze(0).expand(4, -1),
-                'image': torch.zeros(4, 1, 3, 600, 960, dtype=torch.uint8),
-                'original_size': torch.ones(4, 1, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
+                'image_id': torch.arange(0, 16, dtype=torch.int32).reshape(4, 4),
+                'seq_id': torch.ones(4, 4, dtype=torch.int32),
+                'frame_id': torch.arange(0, 16, dtype=torch.int32).reshape(4, 4),
+                'clip_id': torch.arange(0, 4, dtype=torch.int32).unsqueeze(0).expand(4, -1),
+                'image': torch.zeros(4, 4, 3, 600, 960, dtype=torch.uint8),
+                'original_size': torch.ones(4, 4, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
             'bbox': {
-                'image_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'seq_id': torch.ones(4, 1, dtype=torch.int32),
-                'frame_id': torch.arange(0, 4, dtype=torch.int32).reshape(4, 1),
-                'clip_id': torch.arange(0, 1, dtype=torch.int32).unsqueeze(0).expand(4, -1),
+                'image_id': torch.arange(0, 16, dtype=torch.int32).reshape(4, 4),
+                'seq_id': torch.ones(4, 4, dtype=torch.int32),
+                'frame_id': torch.arange(0, 16, dtype=torch.int32).reshape(4, 4),
+                'clip_id': torch.arange(4, 5, dtype=torch.int32).unsqueeze(0).expand(4, -1),
                 'coordinate': torch.zeros(4, 1, 100, 4, dtype=torch.float32),
                 'label': torch.zeros(4, 1, 100, dtype=torch.int32),
                 'probability': torch.zeros(4, 1, 100, dtype=torch.float32),
@@ -120,26 +121,25 @@ class YOLOXSystem(BaseSystem):
     def required_keys_train(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': self.hparams.predict_num,
-            'image': [0],
-            'bbox': [self.hparams.predict_num],
+            'margin': self.hparams.predict_num+3,
+            'image': [0, 1, 2, 3],
+            'bbox': [3, self.hparams.predict_num+3],
         }
 
     @property
     def required_keys_eval(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': self.hparams.predict_num,
-            'image': [0],
-            # 'bbox': [self.hparams.predict_num]
+            'margin': self.hparams.predict_num+3,
+            'image': [0, 1, 2, 3],
         }
 
     @property
     def produced_keys(self) -> BatchKeys:
         return {
             'interval': 1,
-            'margin': self.hparams.predict_num,
-            'bbox': [self.hparams.predict_num],
+            'margin': self.hparams.predict_num+3,
+            'bbox': [self.hparams.predict_num+3],
         }
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
@@ -165,23 +165,23 @@ class YOLOXSystem(BaseSystem):
         labels: Optional[Int[torch.Tensor, 'B Tb O']] = batch['bbox']['label'] if 'bbox' in batch else None
 
         features = self.backbone(images)
-
+        features_p3 = self.neck(features)
         if self.training:
             loss_dict = self.head(
-                features,
+                features_p3,
                 gt_coordinates=coordinates,
                 gt_labels=labels,
                 shape=images.shape[-2:]
             )
             return loss_dict
         else:
-            pred_dict = self.head(features, shape=images.shape[-2:])
+            pred_dict = self.head(features_p3, shape=images.shape[-2:])
             return {
                 'bbox': {
-                    'image_id': batch['image']['image_id'] + self.cp,
-                    'seq_id': batch['image']['seq_id'],
-                    'frame_id': batch['image']['frame_id'] + self.cp,
-                    'clip_id': batch['image']['clip_id'] + self.cp,
+                    'image_id': batch['image']['image_id'][:, -1:] + self.cp,
+                    'seq_id': batch['image']['seq_id'][:, -1:],
+                    'frame_id': batch['image']['frame_id'][:, -1:] + self.cp,
+                    'clip_id': batch['image']['clip_id'][:, -1:] + self.cp,
                     'coordinate': pred_dict['pred_coordinates'],
                     'label': pred_dict['pred_labels'],
                     'probability': pred_dict['pred_probabilities'],
@@ -196,18 +196,26 @@ class YOLOXSystem(BaseSystem):
         images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
 
         features = self.backbone(images)
+        if buffer is not None and 'prev_features' in buffer:
+            features = tuple(torch.cat([bf, f], dim=1) for bf, f in zip(buffer['prev_features'], features))
+        else:
+            features = tuple(torch.cat([f, f, f, f], dim=1) for f in features)
+
+        new_buffer = {'prev_features': tuple(f[:, -3:] for f in features)}
+        features = self.neck(features)
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([
             pred_dict['pred_coordinates'].cpu().numpy()[0, 0],
             pred_dict['pred_probabilities'].cpu().numpy()[0, 0, :, None],
             pred_dict['pred_labels'].cpu().numpy()[0, 0, :, None].astype(float),
-        ], axis=1), axis=0, fixed_length=50, pad_value=0.0), {}
+        ], axis=1), axis=0, fixed_length=50, pad_value=0.0), new_buffer
 
     def configure_optimizers(self):
         p_bias, p_norm, p_weight = [], [], []
         all_parameters = []
         all_parameters.extend(self.backbone.named_modules())
+        all_parameters.extend(self.neck.named_modules())
         all_parameters.extend(self.head.named_modules())
         for k, v in all_parameters:
             if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
@@ -224,8 +232,8 @@ class YOLOXSystem(BaseSystem):
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
 
-def yolox_s(
-        predict_num: int = 0,
+def longshortnet_s(
+        predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 1,
         base_channel: int = 32,
@@ -241,8 +249,8 @@ def yolox_s(
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
         **kwargs
-) -> YOLOXSystem:
-    return YOLOXSystem(
+) -> LongShortNetSystem:
+    return LongShortNetSystem(
         num_classes=num_classes,
         predict_num=predict_num,
         base_depth=base_depth,

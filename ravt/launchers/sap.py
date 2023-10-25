@@ -1,5 +1,6 @@
 import functools
 import json
+import sys
 import os
 import platform
 import random
@@ -23,6 +24,7 @@ from ravt.core.constants import AllConfigs, PhaseTypes
 from ravt.core.base_classes import BaseLauncher, BaseSystem, BaseDataSource, launcher_entry, BaseSAPStrategy
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 from ravt.core.utils.array_operations import remove_pad_along
+from ravt.core.utils.time_recorder import TimeRecorder
 
 from ..base_configs import environment_configs
 
@@ -64,7 +66,7 @@ class SAPServer:
         # start server
         self.proc = subprocess.Popen(
             ' '.join([
-                'python', '-m', 'sap_toolkit.server',
+                sys.executable, '-m', 'sap_toolkit.server',
                 '--data-root', f'{str(self.data_dir.resolve())}',
                 '--annot-path', f'{str(self.ann_file.resolve())}',
                 '--overwrite',
@@ -131,75 +133,82 @@ class SAPLauncher(BaseLauncher):
         self.debug = debug
         self.seed = pl.seed_everything(seed)
 
-    @launcher_entry
-    def test_sap(self, sap_factor: float = 1.0, dataset_fps: int = 30):
+    def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
+        if phase == 'evaluation':
+            self.output_dir = configs['environment']['output_sap_log_dir']
+            self.data_dir = configs['extra']['image_dir']
+            self.ann_file = configs['extra']['test_coco_file']
+            self.original_size = configs['internal']['original_size']
+        return configs
+
+    @launcher_entry()
+    def test_sap(self, sap_factor: float = 1.0, dataset_resize_ratio: float = 2, dataset_fps: int = 30):
         if platform.system() != 'Linux':
             raise EnvironmentError('sAP evaluation is only supported on Linux!')
 
+        with SAPServer(
+            data_dir=self.data_dir,
+            ann_file=self.ann_file,
+            output_dir=self.output_dir,
+            sap_factor=sap_factor
+        ) as server:
+            # start client
+            client_state = (
+                mp.Value('i', -1, lock=True),
+                mp.Event(),
+                mp.Manager().dict(),
+            )
+            client = SAPClient(json.loads(server.config_path.read_text()), client_state, verbose=True)
+            client.stream_start_time = mp.Value('d', 0.0, lock=True)
 
-def run_sap(
-        system: BaseSystem,
-        sap_strategy: Type[BaseStrategy],
-        sap_factor: float = 1.0,
-        dataset_resize_ratio: int = 2,
-        dataset_fps: int = 30,
-        device: Optional[int] = None
-) -> float:
-    if platform.system() != 'Linux':
-        raise EnvironmentError('sAP evaluation is only supported on Linux!')
+            try:
+                # load coco dataset
+                coco = COCO(str(self.ann_file))
+                seqs = coco.dataset['sequences']
+                tr = TimeRecorder('SAP Profile', mode='avg')
 
-    device = device or 0
-    system.eval()
-    system = system.to(torch.device(f'cuda:{device}'))
+                def dataset_resizer(img: np.ndarray) -> np.ndarray:
+                    h, w, c = img.shape
+                    return cv2.resize(
+                        img, (w // dataset_resize_ratio, h // dataset_resize_ratio), interpolation=cv2.INTER_NEAREST
+                    )
 
-    def dataset_resizer(img: np.ndarray) -> np.ndarray:
-        h, w, c = img.shape
-        return cv2.resize(img, (w // dataset_resize_ratio, h // dataset_resize_ratio), interpolation=cv2.INTER_NEAREST)
+                def recv_fn():
+                    frame_id_next, frame = client.get_frame()
+                    frame = dataset_resizer(frame) if frame_id_next is not None else None
+                    return frame_id_next, frame
 
-    with SAPServer(sap_factor=sap_factor) as server:
-        # start client
-        client_state = (
-            mp.Value('i', -1, lock=True),
-            mp.Event(),
-            mp.Manager().dict(),
-        )
-        client = SAPClient(json.loads(server.config_path.read_text()), client_state, verbose=True)
-        client.stream_start_time = mp.Value('d', 0.0, lock=True)
+                def send_fn(array: np.ndarray):
+                    array = remove_pad_along(array, axis=0)
+                    client.send_result_to_server(array[:, :4] * dataset_resize_ratio, array[:, 4], array[:, 5])
+                    tr.record('output_fn')
+                    return None
 
-        try:
-            # load coco dataset
-            coco = COCO(str(dataset_argoverse_dir.joinpath("Argoverse-HD", "annotations", "val.json")))
-            seqs = coco.dataset['sequences']
+                def time_fn(start_time: float):
+                    return (time.perf_counter() - start_time) * dataset_fps
 
-            # warm_up
-            system.infer(dataset_resizer(np.zeros((1200, 1920, 3), dtype=np.int8)))
+                # warm_up
+                self.model.inference(dataset_resizer(np.zeros((*self.original_size, 3), dtype=np.int8)))
 
-            def recv_fn():
-                frame_id_next, frame = client.get_frame()
-                return frame_id_next, dataset_resizer(frame) if frame_id_next is not None else None
+                for seq_id in tqdm(seqs):
+                    client.request_stream(seq_id)
+                    t_start = client.get_stream_start_time()
+                    tr.record()
+                    self.sap_strategy.infer_sequence(
+                        input_fn=recv_fn,
+                        process_fn=self.model.inference,
+                        output_fn=send_fn,
+                        time_fn=functools.partial(time_fn, t_start)
+                    )
+                    client.stop_stream()
 
-            def send_fn(array: np.ndarray):
-                array = remove_pad_along(array, axis=0)
-                client.send_result_to_server(array[:, :4] * dataset_resize_ratio, array[:, 4], array[:, 5])
-                return None
+                tr.print()
+                filename = f'{int(random.randrange(0, 10000000)+time.time()) % 10000000}.json'
+                client.generate(filename)
+                return server.get_result(filename)
 
-            def time_fn(start_time: float):
-                return (time.perf_counter() - start_time) * dataset_fps
-
-            strategy = sap_strategy(system, send_fn=send_fn, recv_fn=recv_fn)
-
-            for seq_id in tqdm(seqs):
-                client.request_stream(seq_id)
-                t_start = client.get_stream_start_time()
-                strategy.infer_sequence(functools.partial(time_fn, t_start))
-                client.stop_stream()
-
-            filename = f'{int(random.randrange(0, 10000000)+time.time()) % 10000000}.json'
-            client.generate(filename)
-            return server.get_result(filename)
-
-        except KeyboardInterrupt as e:
-            logger.warning('Ctrl+C detected. Shutting down sAP server & client.', exc_info=e)
-            raise
-        finally:
-            client.close()
+            except KeyboardInterrupt as e:
+                logger.warning('Ctrl+C detected. Shutting down sAP server & client.', exc_info=e)
+                raise
+            finally:
+                client.close()

@@ -178,11 +178,11 @@ class TA5Neck(nn.Module):
         if past_time_constant is None:
             past_time_constant = self.ptc
         elif isinstance(past_time_constant, list):
-            past_time_constant = torch.tensor(past_time_constant, dtype=torch.int32, device=self.ptc.device)
+            past_time_constant = torch.tensor(past_time_constant, dtype=torch.float32, device=self.ptc.device)
         if future_time_constant is None:
             future_time_constant = self.ftc
         elif isinstance(future_time_constant, list):
-            future_time_constant = torch.tensor(future_time_constant, dtype=torch.int32, device=self.ftc.device)
+            future_time_constant = torch.tensor(future_time_constant, dtype=torch.float32, device=self.ftc.device)
 
         for f, block in zip(features, self.blocks):
             outputs.append(block(f, past_time_constant, future_time_constant))

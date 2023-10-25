@@ -6,3 +6,4 @@ from .yolox_head import YOLOXHead
 from .tal_head import TALHead
 from .schedulers import StreamYOLOScheduler, MSCAScheduler
 from .ta_neck import TANeck, TA5Neck
+from .longshortnet_neck import LongShortNeck
