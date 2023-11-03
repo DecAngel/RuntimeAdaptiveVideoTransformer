@@ -4,7 +4,7 @@ from ravt.core.base_classes import BaseLauncher, launcher_entry
 from ravt.core.constants import AllConfigs
 from ravt.core.functional_classes import SharedMemoryServer
 
-from ..base_configs import environment_configs
+from ravt.core.configs import environment_configs
 
 
 class SharedMemoryLauncher(BaseLauncher):

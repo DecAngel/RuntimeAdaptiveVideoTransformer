@@ -6,11 +6,11 @@ import torch.nn.functional as F
 import numpy as np
 import pytorch_lightning as pl
 
-from ravt.core.utils.phase_init import PhaseInitMixin
-from ravt.core.constants import PredDict, BatchDict, PhaseTypes, AllConfigs
+from ravt.core.constants import PredDict, BatchDict
+from ravt.core.configs import output_visualize_dir
 
 
-class VisualizeCallback(PhaseInitMixin, pl.Callback):
+class VisualizeCallback(pl.Callback):
     def __init__(
             self,
             resize: Optional[Tuple[int, int]] = None,
@@ -27,15 +27,15 @@ class VisualizeCallback(PhaseInitMixin, pl.Callback):
         self.visualize_test = visualize_test_interval
 
         self._trainer: Optional[pl.Trainer] = None
-        self.visualize_dir = None
+        self.visualize_dir = output_visualize_dir
         self.visualize_count = 0
         self.stage = None
 
-    def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
-        if phase == 'visualization':
-            self.visualize_dir = configs['environment']['output_visualize_dir']
-            self.stage = configs['internal']['stage']
-        return configs
+    def on_validation_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.stage = 'eval'
+
+    def on_test_epoch_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.stage = 'test'
 
     def visualize(self, batch: BatchDict, pred: PredDict) -> np.ndarray:
         if 'image' in batch:

@@ -2,7 +2,7 @@ from typing import Optional
 
 from tensorboard import program
 
-from ravt.base_configs import environment_configs
+from ravt.core.configs import environment_configs
 from ravt.core.base_classes import BaseLauncher, launcher_entry
 from ravt.core.constants import AllConfigs, PhaseTypes
 from ravt.core.utils.lightning_logger import ravt_logger as logger

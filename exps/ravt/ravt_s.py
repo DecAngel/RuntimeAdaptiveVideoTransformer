@@ -12,7 +12,7 @@ from typing import Tuple, Optional
 import torch
 import fire
 
-from ravt.data_sources import ArgoverseDataSource
+from ravt.systems.data_sources import ArgoverseDataSource
 from ravt.models import ravt_small_patch4_window7
 from ravt.launchers import TrainTestLauncher
 

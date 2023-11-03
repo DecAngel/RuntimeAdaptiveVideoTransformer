@@ -10,7 +10,7 @@ class BaseSAPStrategy:
     def infer_sequence(
             self,
             input_fn: Callable[[], Tuple[Optional[int], np.ndarray]],
-            process_fn: Callable[[np.ndarray, Optional[Dict], List[int], List[int]], Tuple[np.ndarray, Dict]],
+            process_fn: Callable[[np.ndarray, Optional[Dict]], Tuple[np.ndarray, Dict]],
             output_fn: Callable[[np.ndarray], None],
             time_fn: Callable[[], float],
     ):

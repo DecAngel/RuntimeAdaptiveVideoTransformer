@@ -12,7 +12,7 @@ from typing import Literal, Optional, List
 import torch
 import fire
 
-from ravt.data_sources import ArgoverseDataSource
+from ravt.systems.data_sources import ArgoverseDataSource
 from ravt.models import msca_s
 from ravt.launchers import TrainTestLauncher
 

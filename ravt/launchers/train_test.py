@@ -17,7 +17,7 @@ from ravt.core.utils.hashtags import hash_all
 from ravt.core.base_classes import BaseLauncher, BaseSystem, BaseDataSource, launcher_entry
 from ravt.core.functional_classes import LocalDataModule
 
-from ..base_configs import environment_configs
+from ravt.core.configs import environment_configs
 from .callbacks import EMACallback, VisualizeCallback, NewTqdmProgressBar
 
 

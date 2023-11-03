@@ -1,4 +1,4 @@
-from typing import TypedDict, Union
+from typing import TypedDict, Union, List
 
 import numpy as np
 import torch
@@ -59,11 +59,13 @@ BBoxProbabilityTypeT = Float32[torch.Tensor, 'objects']
 class BBoxComponentDict(_IDComponentDict):
     """BBox component of a batch.
 
-    coordinate: a xyxy array of bbox coordinates
+    coordinate: the xyxy array of bbox coordinates
     label: the category of the bbox
+    probability: the probability of the bbox
     """
     coordinate: BBoxCoordinateTypeN
     label: BBoxLabelTypeN
+    probability: BBoxProbabilityTypeN
 
 
 class BBoxBatchDict(_IDBatchDict, total=False):
@@ -92,3 +94,13 @@ class LossDict(TypedDict, total=False):
 class MetricDict(TypedDict, total=False):
     mAP: Float32[torch.Tensor, '']
     sAP: Float32[torch.Tensor, '']
+
+
+"""Sample Dict"""
+
+
+class SampleDict(TypedDict, total=False):
+    seq_id: int
+    frame_id: int
+    image: List[int]
+    bbox: List[int]

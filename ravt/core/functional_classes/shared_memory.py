@@ -5,31 +5,24 @@ import re
 import subprocess
 import multiprocessing.shared_memory as sm
 from multiprocessing import resource_tracker
-from typing import Tuple, Any, Dict, List, Optional
+from typing import Tuple, Dict, List, Optional
 
 import numpy as np
 from websockets.sync.server import ServerConnection, serve
-from websockets.sync.client import ClientConnection, connect
+from websockets.sync.client import connect
 
-from ravt.core.constants import PhaseTypes, AllConfigs
-from ravt.core.utils.contexts import CallOnExit
-from ravt.core.utils.phase_init import PhaseInitMixin
-from ravt.core.utils.lightning_logger import ravt_logger as logger
+from ..utils.contexts import CallOnExit
+from ..utils.lightning_logger import ravt_logger as logger
+from ..configs import shared_memory_port
 
 
-class SharedMemoryServer(PhaseInitMixin):
+class SharedMemoryServer:
     def __init__(self):
         super().__init__()
         self.close_list: List[sm.SharedMemory] = []
         self.array: Dict[str, int] = {}
-        self.port: Optional[int] = None
 
         self.safe_margin = 1*(2**30)
-
-    def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
-        if phase == 'dataset':
-            self.port = configs['environment']['shared_memory_port']
-        return configs
 
     @functools.cached_property
     def available_shared_memory(self) -> int:
@@ -75,24 +68,18 @@ class SharedMemoryServer(PhaseInitMixin):
 
     def run(self):
         with CallOnExit(self.shutdown):
-            with serve(self.handler, '127.0.0.1', self.port) as server:
+            with serve(self.handler, '127.0.0.1', shared_memory_port) as server:
                 server.serve_forever()
 
 
-class SharedMemoryClient(PhaseInitMixin):
+class SharedMemoryClient:
     def __init__(self):
         super().__init__()
         self.close_list: List[sm.SharedMemory] = []
-        self.port: Optional[int] = None
-
-    def phase_init_impl(self, phase: PhaseTypes, configs: AllConfigs) -> AllConfigs:
-        if phase == 'dataset':
-            self.port = configs['environment']['shared_memory_port']
-        return configs
 
     def test_connection(self) -> bool:
         try:
-            c = connect(f'ws://127.0.0.1:{self.port}', open_timeout=1, close_timeout=1)
+            c = connect(f'ws://127.0.0.1:{shared_memory_port}', open_timeout=1, close_timeout=1)
             c.close()
             return True
         except (TimeoutError, ConnectionRefusedError):
@@ -101,7 +88,7 @@ class SharedMemoryClient(PhaseInitMixin):
     def request_shared_memory(self, name: str, dtype: object, shape_tuple: Tuple[int, ...]) -> np.ndarray:
         ctype = np.ctypeslib.as_ctypes_type(dtype)
         size = ctypes.sizeof(ctype) * functools.reduce(int.__mul__, shape_tuple)
-        with connect(f'ws://127.0.0.1:{self.port}') as client:
+        with connect(f'ws://127.0.0.1:{shared_memory_port}') as client:
             logger.info(f'allocating "{name}" with total size {size/(2**30):.2f} GB')
             client.send(pickle.dumps((name, size)))
             res = pickle.loads(client.recv())

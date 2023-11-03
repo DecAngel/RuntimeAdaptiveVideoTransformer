@@ -7,12 +7,12 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 import fire
 
-from ravt.data_sources import ArgoverseDataSource
+from ravt.systems.data_sources import ArgoverseDataSource
 from ravt.models import longshortnet_s
 from ravt.launchers import TrainTestLauncher
 

@@ -12,7 +12,7 @@ from typing import Optional
 import torch
 import fire
 
-from ravt.data_sources import ArgoverseDataSource
+from ravt.systems.data_sources import ArgoverseDataSource
 from ravt.models import swin_transformer_small_patch4_window7
 from ravt.launchers import TrainTestLauncher
 

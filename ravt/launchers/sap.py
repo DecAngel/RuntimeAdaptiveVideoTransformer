@@ -9,7 +9,7 @@ import subprocess
 import time
 import multiprocessing as mp
 from pathlib import Path
-from typing import Optional, Type, Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -26,7 +26,7 @@ from ravt.core.utils.lightning_logger import ravt_logger as logger
 from ravt.core.utils.array_operations import remove_pad_along
 from ravt.core.utils.time_recorder import TimeRecorder
 
-from ..base_configs import environment_configs
+from ravt.core.configs import environment_configs
 
 
 class SAPServer:
