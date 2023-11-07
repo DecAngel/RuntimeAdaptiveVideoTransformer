@@ -1,9 +1,12 @@
+import contextlib
+import io
 from typing import Optional, Dict, Tuple, Union, List, TypedDict
 
 import numpy as np
 import torch
 import kornia.augmentation as ka
-from jaxtyping import Float, Int
+from jaxtyping import Float, Int, UInt
+from pycocotools.coco import COCO
 from torch import nn
 
 from .blocks import types, StreamYOLOScheduler
@@ -12,10 +15,20 @@ from ..transforms import KorniaAugmentation
 from ..metrics import COCOEvalMAPMetric
 
 from ravt.core.constants import (
-    BatchDict, PredDict, LossDict,
+    BatchDict, PredDict, LossDict, ImageInferenceType, BBoxesInferenceType
 )
 from ravt.core.base_classes import BaseSystem, BaseDataSampler, BaseMetric, BaseTransform, BaseDataSource, BaseSAPStrategy
 from ravt.core.utils.array_operations import clip_or_pad_along
+
+
+def concat_pyramids(pyramids: List[types.PYRAMID], dim: int = 1) -> types.PYRAMID:
+    return tuple(
+        torch.cat([
+            p[i]
+            for p in pyramids
+        ], dim=dim)
+        for i in range(len(pyramids[0]))
+    )
 
 
 class YOLOXBuffer(TypedDict):
@@ -121,7 +134,7 @@ class YOLOXBaseSystem(BaseSystem):
                 'clip_id': torch.arange(1, f+1, dtype=torch.int32).unsqueeze(0).expand(b, -1),
                 'coordinate': torch.zeros(b, f, 100, 4, dtype=torch.float32),
                 'label': torch.zeros(b, f, 100, dtype=torch.int32),
-                'probability': torch.zeros(b, f, 100, dtype=torch.float32),
+                # 'probability': torch.zeros(b, f, 100, dtype=torch.float32),
             }
         },
 
@@ -145,50 +158,14 @@ class YOLOXBaseSystem(BaseSystem):
     def on_validation_epoch_start(self) -> None:
         super().on_validation_epoch_start()
         if isinstance(self.metric, COCOEvalMAPMetric):
-            self.metric.coco = self.data_source.get_coco('eval')
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.metric.coco = COCO(self.data_source.get_ann_file('eval'))
 
     def on_test_epoch_start(self) -> None:
         super().on_test_epoch_start()
         if isinstance(self.metric, COCOEvalMAPMetric):
-            self.metric.coco = self.data_source.get_coco('test')
-
-    def inference_impl(
-            self,
-            image: np.ndarray,
-            buffer: Optional[YOLOXBuffer],
-            past_time_constant: List[int],
-            future_time_constant: List[int],
-    ) -> Tuple[np.ndarray, Optional[Dict]]:
-        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
-
-        features = self.backbone(images)
-        if buffer is None or 'prev_features' not in buffer:
-            new_buffer = {
-                'prev_indices': [-1],
-                'prev_features': [features],
-            }
-        else:
-            past_time_constant = [i for i in past_time_constant if i in buffer['prev_indices']]
-            past_time_indices = [idx for idx, i in enumerate(buffer['prev_indices']) if i in past_time_constant]
-            prev_features = [buffer['prev_features'][idx] for idx in past_time_indices]
-
-            new_buffer = {
-                'prev_indices': [i - 1 for i in past_time_constant] + [-1],
-                'prev_features': prev_features + [features],
-            }
-            features = self.neck(
-                tuple(
-                    torch.cat([f[i] for f in new_buffer['prev_features']], dim=1)
-                    for i in range(len(features))
-                ), torch.tensor([past_time_constant]), torch.tensor([future_time_constant])
-            )
-        pred_dict = self.head(features, shape=images.shape[-2:])
-
-        return clip_or_pad_along(np.concatenate([
-            pred_dict['pred_coordinates'].cpu().numpy()[0, 0],
-            pred_dict['pred_probabilities'].cpu().numpy()[0, 0, :, None],
-            pred_dict['pred_labels'].cpu().numpy()[0, 0, :, None].astype(float),
-        ], axis=1), axis=0, fixed_length=50, pad_value=0.0), new_buffer
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.metric.coco = COCO(self.data_source.get_ann_file('test'))
 
     def forward_impl(
             self,
@@ -197,8 +174,8 @@ class YOLOXBaseSystem(BaseSystem):
         images: Float[torch.Tensor, 'B TP0 C H W'] = batch['image']['image'].float()
         coordinates: Optional[Float[torch.Tensor, 'B TF0 O C']] = batch['bbox']['coordinate'] if 'bbox' in batch else None
         labels: Optional[Int[torch.Tensor, 'B TF0 O']] = batch['bbox']['label'] if 'bbox' in batch else None
-        past_frame_constant = batch['image']['clip_id'][:, :-1]
-        future_frame_constant = batch['bbox']['clip_id'][:, (int(self.with_bbox_0_train) if self.training else 0):]
+        past_frame_constant = batch['image']['clip_id'][:, :-1].float()
+        future_frame_constant = batch['bbox']['clip_id'][:, (int(self.with_bbox_0_train) if self.training else 0):].float()
 
         features_p = self.backbone(images)
         features_f = self.neck(features_p, past_frame_constant, future_frame_constant)

@@ -21,5 +21,5 @@ class BaseDataSource:
     def get_image_dir(self, subset: SubsetTypes) -> Path:
         raise NotImplementedError()
 
-    def get_coco(self, subset: SubsetTypes) -> COCO:
+    def get_ann_file(self, subset: SubsetTypes) -> Path:
         raise NotImplementedError()

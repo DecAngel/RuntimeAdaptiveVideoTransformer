@@ -7,3 +7,4 @@ from .batch import (
     PredDict, LossDict, MetricDict,
     SampleDict,
 )
+from .inference import ImageInferenceType, BBoxesInferenceType, BBoxInferenceType

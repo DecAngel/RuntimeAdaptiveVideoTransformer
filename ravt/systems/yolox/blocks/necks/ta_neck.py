@@ -60,16 +60,16 @@ class TA5Block(nn.Module):
 
         attn_query = self.fc_query(attn_in_f)                                       # B TF C
         attn_key = self.fc_key(attn_in_p)                                           # B TP C
-        attn_value = (feature_p[:, -1:]-feature_p[:, :-1]).flatten(2, 4)                                        # B TP CHW
+        attn_value = (feature_p[:, -1:]-feature_p[:, :-1]).flatten(2, 4)            # B TP CHW
 
         # B TF CHW
-        attn_weight = attn_query @ attn_key.transpose(-2, -1) / math.sqrt(attn_query.size(-1))
+        attn_weight = attn_query @ attn_key.transpose(-2, -1) / math.sqrt(attn_query.size(1))
         attn = attn_weight @ attn_value         # BHW TF C
         # attn = nn.functional.scaled_dot_product_attention(attn_query, attn_key, attn_value)
         # B TF C H W
         attn = attn.unflatten(2, (C, H, W))
         # B TF C H W
-        feature_f = feature_f + attn * self.p_attn
+        feature_f = feature_f + attn * self.p_attn / attn_key.size(1)
 
         return feature_f
 
@@ -78,8 +78,6 @@ class TA5Neck(BaseNeck):
     def __init__(
             self,
             in_channels: Tuple[int, ...],
-            past_time_constant: List[int],
-            future_time_constant: List[int],
             **kwargs
     ):
         super().__init__()
@@ -87,8 +85,6 @@ class TA5Neck(BaseNeck):
             TA5Block(c)
             for c in in_channels
         ])
-        self.register_buffer('ptc', torch.tensor([past_time_constant], dtype=torch.float32), persistent=False)
-        self.register_buffer('ftc', torch.tensor([future_time_constant], dtype=torch.float32), persistent=False)
 
     def forward(
             self,
@@ -98,13 +94,10 @@ class TA5Neck(BaseNeck):
     ) -> PYRAMID:
         outputs = []
         if past_time_constant is None:
-            past_time_constant = self.ptc
-        elif isinstance(past_time_constant, list):
-            past_time_constant = torch.tensor(past_time_constant, dtype=torch.float32, device=self.ptc.device)
+            TP = features[0].size(1) - 1
+            past_time_constant = torch.arange(-TP, -1, step=1, dtype=torch.float32, device=features[0].device)[None, ...]
         if future_time_constant is None:
-            future_time_constant = self.ftc
-        elif isinstance(future_time_constant, list):
-            future_time_constant = torch.tensor(future_time_constant, dtype=torch.float32, device=self.ftc.device)
+            future_time_constant = torch.tensor([[1]], dtype=torch.float32, device=features[0].device)
 
         for f, block in zip(features, self.blocks):
             outputs.append(block(f, past_time_constant, future_time_constant))

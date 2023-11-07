@@ -20,7 +20,7 @@ except ImportError:
     # low pytorch version where LRScheduler is protected
     from torch.optim.lr_scheduler import _LRScheduler as LRScheduler
 
-from ..constants import BatchDict, PredDict, LossDict
+from ..constants import BatchDict, PredDict, LossDict, ImageInferenceType, BBoxesInferenceType
 from ..utils.lightning_logger import ravt_logger as logger
 
 
@@ -76,20 +76,20 @@ class BaseSystem(pl.LightningModule):
 
     def inference_impl(
             self,
-            image: np.ndarray,
+            image: ImageInferenceType,
             buffer: Optional[Dict],
-            past_time_constant: List[int],
-            future_time_constant: List[int],
-    ) -> Tuple[np.ndarray, Optional[Dict]]:
+            past_time_constant: Optional[List[int]] = None,
+            future_time_constant: Optional[List[int]] = None,
+    ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
         raise NotImplementedError()
 
     def inference(
             self,
-            image: np.ndarray,
+            image: ImageInferenceType,
             buffer: Optional[Dict],
-            past_time_constant: List[int],
-            future_time_constant: List[int],
-    ) -> Tuple[np.ndarray, Optional[Dict]]:
+            past_time_constant: Optional[List[int]] = None,
+            future_time_constant: Optional[List[int]] = None,
+    ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
         with torch.inference_mode():
             return self.inference_impl(image, buffer, past_time_constant, future_time_constant)
 

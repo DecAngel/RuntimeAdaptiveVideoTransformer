@@ -18,7 +18,7 @@ from ravt.core.base_classes import BaseLauncher, BaseSystem, BaseDataSource, lau
 from ravt.core.functional_classes import LocalDataModule
 
 from ravt.core.configs import environment_configs
-from .callbacks import EMACallback, VisualizeCallback, NewTqdmProgressBar
+from ravt.launchers.callbacks import EMACallback, VisualizeCallback, NewTqdmProgressBar
 
 
 class TrainTestLauncher(BaseLauncher):

@@ -8,16 +8,16 @@ from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
 from ravt.core.constants import ImageInferenceType, BBoxesInferenceType
 from ravt.core.utils.array_operations import clip_or_pad_along
 
-from .yolox_base import YOLOXBaseSystem, YOLOXBuffer
+from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone
-from .blocks.necks import IdentityNeck
-from .blocks.heads import YOLOXHead
+from .blocks.necks import LongShortNeck
+from .blocks.heads import TALHead
 from ..data_samplers import YOLOXDataSampler
 from ..metrics import COCOEvalMAPMetric
 from ..transforms import KorniaAugmentation
 
 
-class YOLOXSystem(YOLOXBaseSystem):
+class LongShortNetSystem(YOLOXBaseSystem):
     def __init__(
             self,
             data_source: Optional[BaseDataSource] = None,
@@ -35,7 +35,7 @@ class YOLOXSystem(YOLOXBaseSystem):
             max_objs: int = 100,
 
             # predict parameters
-            predict_num: int = 0,
+            predict_num: int = 1,
 
             # postprocess parameters
             conf_thre: float = 0.01,
@@ -52,11 +52,11 @@ class YOLOXSystem(YOLOXBaseSystem):
 
         super().__init__(
             backbone=YOLOXPAFPNBackbone(**self.hparams),
-            neck=IdentityNeck(**self.hparams),
-            head=YOLOXHead(**self.hparams),
-            with_bbox_0_train=False,
+            neck=LongShortNeck(**self.hparams),
+            head=TALHead(**self.hparams),
+            with_bbox_0_train=True,
             data_source=data_source,
-            data_sampler=YOLOXDataSampler(1, [0], [predict_num], [[0]], [[predict_num]]),
+            data_sampler=YOLOXDataSampler(1, [-3, -2, -1, 0], [predict_num], [[-3, -2, -1, 0]], [[0, predict_num]]),
             transform=KorniaAugmentation(
                 train_aug=ka.VideoSequential(ka.RandomHorizontalFlip()),
                 train_resize=ka.VideoSequential(
@@ -99,23 +99,35 @@ class YOLOXSystem(YOLOXBaseSystem):
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
-        # Ignore buffer, ptc and ftc
+        # Ignore ptc and ftc
         images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
+
+        # Buffer and neck
+        if buffer is None or 'prev_features' not in buffer:
+            new_buffer = {
+                'prev_features': [features]*3,
+            }
+            features = self.neck(concat_pyramids([features]*4))
+        else:
+            new_buffer = {
+                'prev_features': buffer['prev_features'][1:] + [features]
+            }
+            features = self.neck(concat_pyramids([*buffer['prev_features'], features]))
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([
             pred_dict['pred_coordinates'].cpu().numpy()[0],
             pred_dict['pred_probabilities'].cpu().numpy()[0, :, :, None],
             pred_dict['pred_labels'].cpu().numpy()[0, :, :, None].astype(float),
-        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), {}
+        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), new_buffer
 
 
-def yolox_s(
+def longshortnet_s(
         data_source: Optional[BaseDataSource] = None,
         strategy: Optional[BaseSAPStrategy] = None,
 
-        predict_num: int = 0,
+        predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 1,
         base_channel: int = 32,
@@ -131,8 +143,8 @@ def yolox_s(
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
         **kwargs
-) -> YOLOXSystem:
-    return YOLOXSystem(
+) -> LongShortNetSystem:
+    return LongShortNetSystem(
         data_source=data_source,
         strategy=strategy,
         num_classes=num_classes,

@@ -7,12 +7,11 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from ravt.launchers import SharedMemoryLauncher
+from ravt.launchers.shared_memory import run_shm_server
 
 
 def main():
-    server = SharedMemoryLauncher()
-    server.run()
+    run_shm_server()
 
 
 if __name__ == '__main__':

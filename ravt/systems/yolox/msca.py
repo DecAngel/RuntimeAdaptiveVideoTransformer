@@ -1,23 +1,27 @@
-from typing import Optional, Tuple, Literal, List, Dict
+import itertools
+import random
+from typing import Optional, Tuple, Literal, List, Union, Dict
 
 import kornia.augmentation as ka
 import numpy as np
 import torch
+from torch import nn
 
 from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
-from ravt.core.constants import ImageInferenceType, BBoxesInferenceType
+from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchDict, PredDict, LossDict
 from ravt.core.utils.array_operations import clip_or_pad_along
 
-from .yolox_base import YOLOXBaseSystem, YOLOXBuffer
+from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone
-from .blocks.necks import IdentityNeck
-from .blocks.heads import YOLOXHead
+from .blocks.necks import TA5Neck
+from .blocks.heads import TALHead
+from .blocks.schedulers import StreamYOLOScheduler
 from ..data_samplers import YOLOXDataSampler
 from ..metrics import COCOEvalMAPMetric
 from ..transforms import KorniaAugmentation
 
 
-class YOLOXSystem(YOLOXBaseSystem):
+class MSCASystem(YOLOXBaseSystem):
     def __init__(
             self,
             data_source: Optional[BaseDataSource] = None,
@@ -35,7 +39,8 @@ class YOLOXSystem(YOLOXBaseSystem):
             max_objs: int = 100,
 
             # predict parameters
-            predict_num: int = 0,
+            past_time_constant: List[int] = None,
+            future_time_constant: List[int] = None,
 
             # postprocess parameters
             conf_thre: float = 0.01,
@@ -52,11 +57,14 @@ class YOLOXSystem(YOLOXBaseSystem):
 
         super().__init__(
             backbone=YOLOXPAFPNBackbone(**self.hparams),
-            neck=IdentityNeck(**self.hparams),
-            head=YOLOXHead(**self.hparams),
-            with_bbox_0_train=False,
+            neck=TA5Neck(**self.hparams),
+            head=TALHead(**self.hparams),
+            with_bbox_0_train=True,
             data_source=data_source,
-            data_sampler=YOLOXDataSampler(1, [0], [predict_num], [[0]], [[predict_num]]),
+            data_sampler=YOLOXDataSampler(
+                1, [*past_time_constant, 0], future_time_constant,
+                [[*past_time_constant, 0]], [[0, *future_time_constant]]
+            ),
             transform=KorniaAugmentation(
                 train_aug=ka.VideoSequential(ka.RandomHorizontalFlip()),
                 train_resize=ka.VideoSequential(
@@ -88,7 +96,7 @@ class YOLOXSystem(YOLOXBaseSystem):
                 eval_aug=None,
                 eval_resize=ka.VideoSequential(ka.Resize((600, 960))),
             ),
-            metric=COCOEvalMAPMetric(future_time_constant=[predict_num]),
+            metric=COCOEvalMAPMetric(future_time_constant=future_time_constant),
             strategy=strategy,
         )
 
@@ -99,23 +107,100 @@ class YOLOXSystem(YOLOXBaseSystem):
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
-        # Ignore buffer, ptc and ftc
         images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
+
+        if past_time_constant is None:
+            pass
+
+        # Buffer and neck
+        if buffer is None or 'prev_features' not in buffer:
+            new_buffer = {
+                'prev_indices': [0],
+                'prev_features': [features],
+            }
+            features = self.neck(concat_pyramids([features]*4))
+        else:
+            new_buffer = {
+                'prev_features': buffer['prev_features'][1:] + [features]
+            }
+            features = self.neck(concat_pyramids([*buffer['prev_features'], features]))
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([
             pred_dict['pred_coordinates'].cpu().numpy()[0],
             pred_dict['pred_probabilities'].cpu().numpy()[0, :, :, None],
             pred_dict['pred_labels'].cpu().numpy()[0, :, :, None].astype(float),
-        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), {}
+        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), new_buffer
+    
+    def forward_impl(
+            self,
+            batch: BatchDict,
+    ) -> Union[PredDict, LossDict]:
+        if self.training:
+            # random mask past and future
+            TP = batch['image']['clip_id'].size(1) - 1
+            image_masks = random.sample(range(TP), k=random.randint(1, TP)) + [TP]
+            image_masks.sort()
+            for k in batch['image'].keys():
+                batch['image'][k] = batch['image'][k][:, image_masks]
+
+            TF = batch['bbox']['clip_id'].size(1) - 1
+            bbox_masks = [0] + random.sample(range(1, TF+1), k=random.randint(1, TF))
+            bbox_masks.sort()
+            for k in batch['bbox'].keys():
+                batch['bbox'][k] = batch['bbox'][k][:, bbox_masks]
+        return super().forward_impl(batch)
+
+    def configure_optimizers(self):
+        p_normal, p_wd, p_normal_lr, p_wd_lr, p_add = [], [], [], [], []
+        all_parameters = []
+        all_parameters.extend(self.backbone.named_modules(prefix='backbone'))
+        all_parameters.extend(self.neck.named_modules(prefix='neck'))
+        all_parameters.extend(self.head.named_modules(prefix='head'))
+        for k, v in all_parameters:
+            if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+                if 'neck' in k or 'head' in k:
+                    p_normal_lr.append(v.bias)
+                else:
+                    p_normal.append(v.bias)
+            if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)) or 'bn' in k:
+                if 'neck' in k or 'head' in k:
+                    p_normal_lr.append(v.weight)
+                else:
+                    p_normal.append(v.weight)
+            elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
+                if 'neck' in k or 'head' in k:
+                    p_wd_lr.append(v.weight)
+                else:
+                    p_wd.append(v.weight)  # apply decay
+            # neck
+            if hasattr(v, 'p_attn'):
+                p_add.append(v.p_attn)
+        optimizer = torch.optim.SGD(
+            [
+                {'params': p_normal},
+                {'params': p_wd, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_normal_lr, 'lr': self.hparams.lr * 5},
+                {'params': p_wd_lr, 'lr': self.hparams.lr * 5, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_add, 'lr': self.hparams.lr * 30}
+            ],
+            lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True
+        )
+        scheduler = StreamYOLOScheduler(
+            optimizer,
+            int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs)
+        )
+
+        return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
 
-def yolox_s(
+def msca_s(
         data_source: Optional[BaseDataSource] = None,
         strategy: Optional[BaseSAPStrategy] = None,
 
-        predict_num: int = 0,
+        past_time_constant: List[int] = None,
+        future_time_constant: List[int] = None,
         num_classes: int = 8,
         base_depth: int = 1,
         base_channel: int = 32,
@@ -131,12 +216,13 @@ def yolox_s(
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
         **kwargs
-) -> YOLOXSystem:
-    return YOLOXSystem(
+) -> MSCASystem:
+    return MSCASystem(
         data_source=data_source,
         strategy=strategy,
         num_classes=num_classes,
-        predict_num=predict_num,
+        past_time_constant=past_time_constant,
+        future_time_constant=future_time_constant,
         base_depth=base_depth,
         base_channel=base_channel,
         strides=strides,

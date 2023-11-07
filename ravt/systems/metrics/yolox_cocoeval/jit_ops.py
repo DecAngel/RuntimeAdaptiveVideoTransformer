@@ -123,7 +123,7 @@ class FastCOCOEvalOp(JitOp):
         self.path = Path(__file__).parent.joinpath('cocoeval')
 
     def absolute_name(self):
-        return f'ravt.models.metrics.{self.name}'
+        return f'ravt.systems.metrics.{self.name}'
 
     def sources(self):
         sources = glob.glob(str(self.path.joinpath('*.cpp')))

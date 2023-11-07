@@ -11,17 +11,18 @@ from typing import Literal, Optional, List
 
 import torch
 import fire
+import pytorch_lightning as pl
 
 from ravt.systems.data_sources import ArgoverseDataSource
-from ravt.models import msca_s
-from ravt.launchers import TrainTestLauncher
+from ravt.systems.yolox import msca_s
+from ravt.launchers.train import run_train
 
 torch.set_float32_matmul_precision('high')
 
 
 def main(
         exp_tag: str, past_time_constant: List[int], future_time_constant: List[int],
-        neck_type: Literal['ta', 'ta5'] = 'ta',
+        enable_cache: bool = True, seed: Optional[int] = None,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
     """ Train and test msca_s model on Argoverse-HD
@@ -29,20 +30,21 @@ def main(
     :param exp_tag: the tag for the experiment
     :param past_time_constant:
     :param future_time_constant:
-    :param neck_type:
+    :param enable_cache: use shared memory allocator
+    :param seed: the random seed
     :param batch_size: batch size of the exp, set None to auto-detect
     :param device_id: the cuda device id to place the model on
     :param visualize: enable visualization
     :param debug: enable debug mode
     :return:
     """
+    seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
-    data_source = ArgoverseDataSource()
-    model = msca_s(
+    system = msca_s(
+        data_source=ArgoverseDataSource(enable_cache=enable_cache),
         past_time_constant=past_time_constant,
         future_time_constant=future_time_constant,
-        neck_type=neck_type,
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
         momentum=0.9,
@@ -50,16 +52,14 @@ def main(
         conf_thre=0.01,
         nms_thre=0.65,
     )
-    model.load_from_pth(Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth')
-    # model.load_from_pth(Path(root_dir) / 'weights' / 'benchmark' / 'streamyolo_s_012_official.pth')
-    launcher = TrainTestLauncher(
-        system=model, data_source=data_source, exp_tag=exp_tag, max_epoch=15,
+    system.load_from_pth(Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth')
+
+    res = run_train(
+        system, exp_tag=exp_tag, max_epoch=15,
         batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-        callback_ema=True, callback_visualize=visualize,
+        callback_ema=True, callback_visualize=visualize, resume=None, seed=seed,
     )
-    train_res = launcher.train(resume=None)
-    test_res = launcher.test(resume='best')
-    print(train_res, test_res)
+    print(res)
 
 
 if __name__ == '__main__':

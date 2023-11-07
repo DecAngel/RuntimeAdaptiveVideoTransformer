@@ -1,16 +1,20 @@
-from typing import Optional, Tuple, Literal
+from typing import Optional, Tuple, Literal, List, Dict
 
 import kornia.augmentation as ka
+import numpy as np
+import torch
 
-from .yolox_base import YOLOXBaseSystem
+from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
+from ravt.core.constants import ImageInferenceType, BBoxesInferenceType
+from ravt.core.utils.array_operations import clip_or_pad_along
+
+from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone
 from .blocks.necks import DFP
 from .blocks.heads import TALHead
 from ..data_samplers import YOLOXDataSampler
 from ..metrics import COCOEvalMAPMetric
 from ..transforms import KorniaAugmentation
-
-from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
 
 
 class StreamYOLOSystem(YOLOXBaseSystem):
@@ -84,9 +88,36 @@ class StreamYOLOSystem(YOLOXBaseSystem):
                 eval_aug=None,
                 eval_resize=ka.VideoSequential(ka.Resize((600, 960))),
             ),
-            metric=COCOEvalMAPMetric(),
+            metric=COCOEvalMAPMetric(future_time_constant=[predict_num]),
             strategy=strategy,
         )
+
+    def inference_impl(
+            self,
+            image: ImageInferenceType,
+            buffer: Optional[YOLOXBuffer],
+            past_time_constant: Optional[List[int]] = None,
+            future_time_constant: Optional[List[int]] = None,
+    ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
+        # Ignore ptc and ftc
+        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        features = self.backbone(images)
+
+        # Buffer and neck
+        new_buffer = {
+            'prev_features': [features],
+        }
+        if buffer is None or 'prev_features' not in buffer:
+            features = self.neck(concat_pyramids([features, features]))
+        else:
+            features = self.neck(concat_pyramids([*buffer['prev_features'], features]))
+        pred_dict = self.head(features, shape=images.shape[-2:])
+
+        return clip_or_pad_along(np.concatenate([
+            pred_dict['pred_coordinates'].cpu().numpy()[0],
+            pred_dict['pred_probabilities'].cpu().numpy()[0, :, :, None],
+            pred_dict['pred_labels'].cpu().numpy()[0, :, :, None].astype(float),
+        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), new_buffer
 
 
 def streamyolo_s(

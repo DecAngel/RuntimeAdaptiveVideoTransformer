@@ -38,7 +38,7 @@ class YOLOXDataSampler(BaseDataSampler):
                     }
                     for frame_id, rand_id in zip(
                         range(-self.train_margin[0], seq_len-self.train_margin[1]),
-                        random.choices(range(len(self.train_image_clip)), k= seq_len-self.train_margin[1]+self.train_margin[0]),
+                        random.choices(range(len(self.train_image_clip)), k=seq_len-self.train_margin[1]+self.train_margin[0]),
                     )
                 ]
                 for seq_id, seq_len in enumerate(seq_lengths)

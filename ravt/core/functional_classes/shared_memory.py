@@ -69,6 +69,7 @@ class SharedMemoryServer:
     def run(self):
         with CallOnExit(self.shutdown):
             with serve(self.handler, '127.0.0.1', shared_memory_port) as server:
+                logger.info(f'starting shm server on ws://127.0.0.1:{shared_memory_port}')
                 server.serve_forever()
 
 

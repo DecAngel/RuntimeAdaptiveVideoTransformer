@@ -11,6 +11,7 @@ from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.trainer.states import TrainerStatus
 
 from ravt.core.utils.lightning_logger import ravt_logger as logger
+from ravt.core.utils.occupy_memory import occupy_mem
 from ravt.core.base_classes import BaseSystem, BaseDataSource
 from ravt.core.functional_classes import LocalDataModule
 from ravt.core import configs
@@ -50,7 +51,8 @@ def run_train(
         resume: Union[Path, str, Literal['last', 'best'], None] = None,
 ):
     # Init
-    seed = pl.seed_everything(seed)
+    if seed is None:
+        raise ValueError('seed must be set at the beginning of the exp!')
     device_ids = device_ids or [0]
     dataset = LocalDataModule(system.data_source, system.data_sampler, batch_size, num_workers)
     time_tag = time.strftime("%d%H%M")
@@ -111,6 +113,7 @@ def run_train(
         detect_anomaly=True if debug else False,
         profiler='simple' if debug else None,
     )
+
     trainer.fit(system, datamodule=dataset)
 
     if trainer.state.status == TrainerStatus.INTERRUPTED:
@@ -121,4 +124,3 @@ def run_train(
     return {
         'eval_mAP': round(trainer.checkpoint_callback.best_model_score.item(), 3),
     }
-

@@ -7,12 +7,11 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from ravt.launchers import TensorboardLauncher
+from ravt.launchers.tensorboard import run_tb_server
 
 
 def main():
-    server = TensorboardLauncher()
-    server.run()
+    run_tb_server()
 
 
 if __name__ == '__main__':

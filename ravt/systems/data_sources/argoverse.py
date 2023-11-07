@@ -225,16 +225,15 @@ class ArgoverseDataSource(BaseDataSource):
     def get_image_dir(self, subset: SubsetTypes) -> Path:
         return self.img_dir
 
-    def get_coco(self, subset: SubsetTypes) -> COCO:
-        with contextlib.redirect_stdout(io.StringIO()):
-            if subset == 'train':
-                return COCO(str(self.ann_train_file))
-            elif subset == 'eval':
-                return COCO(str(self.ann_eval_file))
-            elif subset == 'test':
-                return COCO(str(self.ann_test_file))
-            else:
-                raise ValueError(f'Unsupported subset {subset}')
+    def get_ann_file(self, subset: SubsetTypes) -> Path:
+        if subset == 'train':
+            return self.ann_train_file
+        elif subset == 'eval':
+            return self.ann_eval_file
+        elif subset == 'test':
+            return self.ann_test_file
+        else:
+            raise ValueError(f'Unsupported subset {subset}')
 
     @functools.cache
     def subset(self, subset: SubsetTypes) -> 'ArgoverseDataSource.Subset':
