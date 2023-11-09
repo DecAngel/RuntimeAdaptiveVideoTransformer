@@ -41,10 +41,13 @@ class MSCASystem(YOLOXBaseSystem):
             max_objs: int = 100,
 
             # backbone type
-            backbone: Literal['pafpn', 'drfpn'] = 'drfpn',
+            backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
 
             # neck type
             neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+
+            # train type
+            train_mask: bool = False,
 
             # predict parameters
             past_time_constant: List[int] = None,
@@ -108,6 +111,24 @@ class MSCASystem(YOLOXBaseSystem):
             strategy=strategy,
         )
 
+    def pth_adapter(self, state_dict: Dict) -> Dict:
+        if self.hparams.backbone == 'pafpn':
+            return super().pth_adapter(state_dict)
+        else:
+            new_ckpt = {}
+            for k, v in state_dict['model'].items():
+                k = k.replace('.lateral_conv0.', '.down_conv_5_4.')
+                k = k.replace('.C3_p4.', '.down_csp_4_4.')
+                k = k.replace('.reduce_conv1.', '.down_conv_4_3.')
+                k = k.replace('.C3_p3.', '.down_csp_3_3.')
+                k = k.replace('.bu_conv2.', '.up_conv_3_3.')
+                k = k.replace('.C3_n3.', '.up_csp_3_4.')
+                k = k.replace('.bu_conv1.', '.up_conv_4_4.')
+                k = k.replace('.C3_n4.', '.up_csp_4_5.')
+                k = k.replace('neck.', 'backbone.neck.')
+                new_ckpt[k] = v
+            return new_ckpt
+
     def inference_impl(
             self,
             image: ImageInferenceType,
@@ -165,7 +186,7 @@ class MSCASystem(YOLOXBaseSystem):
             self,
             batch: BatchDict,
     ) -> Union[PredDict, LossDict]:
-        if self.training:
+        if self.hparams.train_mask and self.training:
             # random mask past and future
             TP = batch['image']['clip_id'].size(1) - 1
             image_masks = random.sample(range(TP), k=random.randint(1, TP)) + [TP]
@@ -222,6 +243,15 @@ class MSCASystem(YOLOXBaseSystem):
 
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
+    def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
+        super().on_train_batch_end(outputs, batch, batch_idx)
+        p_attn = torch.cat([b.p_attn.flatten() for b in self.neck.blocks])
+        self.log_dict({'p_mean': torch.mean(p_attn), 'p_std': torch.std(p_attn)}, on_step=True)
+        attn_weight = torch.mean(torch.stack([b.attn_weight for b in self.neck.blocks], dim=0), dim=0)
+        for f, w in enumerate(attn_weight):
+            for p, ww in enumerate(w):
+                self.log(f'w_{f}_{p}', ww, on_step=True)
+
 
 def msca_s(
         data_source: Optional[BaseDataSource] = None,
@@ -240,8 +270,9 @@ def msca_s(
         depthwise: bool = False,
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
-        backbone: Literal['pafpn', 'drfpn'] = 'drfpn',
+        backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
         neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+        train_mask: bool = False,
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
         lr: float = 0.001,
@@ -267,6 +298,7 @@ def msca_s(
         max_objs=max_objs,
         backbone=backbone,
         neck_act_type=neck_act_type,
+        train_mask=train_mask,
         conf_thre=conf_thre,
         nms_thre=nms_thre,
         lr=lr,

@@ -77,6 +77,8 @@ class TA5Block(nn.Module):
         # B TF CHW
         attn_weight = attn_query @ attn_key.transpose(-2, -1) / math.sqrt(attn_query.size(1))
         attn_weight = self.act(attn_weight)
+        if self.training:
+            self.attn_weight = torch.mean(attn_weight, dim=0)
         attn = attn_weight @ attn_value         # BHW TF C
         # attn = nn.functional.scaled_dot_product_attention(attn_query, attn_key, attn_value)
         # B TF C H W
