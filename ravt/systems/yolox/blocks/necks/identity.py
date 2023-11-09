@@ -1,8 +1,5 @@
-from typing import Tuple, Optional
+from typing import Optional
 
-from torch import nn
-
-from ..layers.network_blocks import BaseConv
 from ..types import PYRAMID, BaseNeck, TIME
 
 
@@ -16,5 +13,5 @@ class IdentityNeck(BaseNeck):
             past_time_constant: Optional[TIME] = None,
             future_time_constant: Optional[TIME] = None
     ) -> PYRAMID:
-        TF = future_time_constant.size(1)
+        TF = future_time_constant.size(-1)
         return tuple(f[:, [-1]*TF] for f in features)

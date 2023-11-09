@@ -3,14 +3,18 @@ from typing import Callable, Tuple, Dict, Optional, List
 
 import numpy as np
 from ravt.core.base_classes import BaseSAPStrategy
+from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BBoxInferenceType
 
 
 class DadeSchedulingStrategy(BaseSAPStrategy):
     def infer_sequence(
             self,
-            input_fn: Callable[[], Tuple[Optional[int], np.ndarray]],
-            process_fn: Callable[[np.ndarray, Optional[Dict], List[int], List[int]], Tuple[np.ndarray, Dict]],
-            output_fn: Callable[[np.ndarray], None],
+            input_fn: Callable[[], Tuple[Optional[int], ImageInferenceType]],
+            process_fn: Callable[
+                [ImageInferenceType, Optional[Dict], Optional[List[int]], Optional[List[int]]],
+                Tuple[BBoxesInferenceType, Dict]
+            ],
+            output_fn: Callable[[BBoxInferenceType], None],
             time_fn: Callable[[], float],
     ):
         current_fid = -1
@@ -28,7 +32,7 @@ class DadeSchedulingStrategy(BaseSAPStrategy):
             start_fid = time_fn()
             predict_num = min(4, max(1, math.ceil(last_runtime)))
 
-            res, buffer = process_fn(frame, buffer, [-3, -2, -1], [predict_num])
-            output_fn(res)
+            res, buffer = process_fn(frame, buffer, [-predict_num], [predict_num])
+            output_fn(res[0])
 
             last_runtime = time_fn() - start_fid

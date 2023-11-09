@@ -12,7 +12,7 @@ from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchDi
 from ravt.core.utils.array_operations import clip_or_pad_along
 
 from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
-from .blocks.backbones import YOLOXPAFPNBackbone
+from .blocks.backbones import YOLOXPAFPNBackbone, DAMOBackbone
 from .blocks.necks import TA5Neck
 from .blocks.heads import TALHead
 from .blocks.schedulers import StreamYOLOScheduler
@@ -30,6 +30,8 @@ class MSCASystem(YOLOXBaseSystem):
             # structural parameters
             base_depth: int = 3,
             base_channel: int = 64,
+            base_neck_depth: int = 3,
+            hidden_ratio: float = 1.0,
             strides: Tuple[int, ...] = (8, 16, 32),
             in_channels: Tuple[int, ...] = (256, 512, 1024),
             mid_channel: int = 256,
@@ -37,6 +39,12 @@ class MSCASystem(YOLOXBaseSystem):
             act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
             num_classes: int = 8,
             max_objs: int = 100,
+
+            # backbone type
+            backbone: Literal['pafpn', 'drfpn'] = 'drfpn',
+
+            # neck type
+            neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
 
             # predict parameters
             past_time_constant: List[int] = None,
@@ -56,7 +64,7 @@ class MSCASystem(YOLOXBaseSystem):
         self.save_hyperparameters(ignore=['kwargs', 'data_source', 'strategy'])
 
         super().__init__(
-            backbone=YOLOXPAFPNBackbone(**self.hparams),
+            backbone=YOLOXPAFPNBackbone(**self.hparams) if backbone == 'pafpn' else DAMOBackbone(**self.hparams),
             neck=TA5Neck(**self.hparams),
             head=TALHead(**self.hparams),
             with_bbox_0_train=True,
@@ -110,21 +118,41 @@ class MSCASystem(YOLOXBaseSystem):
         images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
 
-        if past_time_constant is None:
-            pass
-
-        # Buffer and neck
-        if buffer is None or 'prev_features' not in buffer:
-            new_buffer = {
-                'prev_indices': [0],
-                'prev_features': [features],
-            }
-            features = self.neck(concat_pyramids([features]*4))
+        if buffer is not None:
+            past_indices = buffer['prev_indices']
+            past_features = buffer['prev_features']
         else:
-            new_buffer = {
-                'prev_features': buffer['prev_features'][1:] + [features]
-            }
-            features = self.neck(concat_pyramids([*buffer['prev_features'], features]))
+            past_indices = []
+            past_features = []
+
+        if past_time_constant is None:
+            default_max_past = 3
+            default_interval = 1
+            ptc = [p-default_interval for p in past_indices[-default_max_past:]]
+            pf = past_features[-default_max_past:]
+        else:
+            interval = past_time_constant[-1]
+            ptc = [p-interval for p in past_indices if p-interval in past_time_constant]
+            pf = [past_features[i] for i, p in enumerate(past_indices) if p-interval in past_time_constant]
+
+        if future_time_constant is None:
+            ftc = [1]
+        else:
+            ftc = future_time_constant
+
+        # Buffer
+        new_buffer = {
+            'prev_indices': ptc + [0],
+            'prev_features': pf + [features],
+        }
+        if len(ptc) > 0:
+            features = self.neck(
+                concat_pyramids(pf + [features]),
+                past_time_constant=torch.tensor([ptc], dtype=torch.float32, device=self.device),
+                future_time_constant=torch.tensor([ftc], dtype=torch.float32, device=self.device),
+            )
+        else:
+            features = concat_pyramids([features]*len(future_time_constant))
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([
@@ -204,12 +232,16 @@ def msca_s(
         num_classes: int = 8,
         base_depth: int = 1,
         base_channel: int = 32,
+        base_neck_depth: int = 3,
+        hidden_ratio: float = 0.75,
         strides: Tuple[int, ...] = (8, 16, 32),
         in_channels: Tuple[int, ...] = (128, 256, 512),
         mid_channel: int = 128,
         depthwise: bool = False,
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
+        backbone: Literal['pafpn', 'drfpn'] = 'drfpn',
+        neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
         lr: float = 0.001,
@@ -225,12 +257,16 @@ def msca_s(
         future_time_constant=future_time_constant,
         base_depth=base_depth,
         base_channel=base_channel,
+        base_neck_depth=base_neck_depth,
+        hidden_ratio=hidden_ratio,
         strides=strides,
         in_channels=in_channels,
         mid_channel=mid_channel,
         depthwise=depthwise,
         act=act,
         max_objs=max_objs,
+        backbone=backbone,
+        neck_act_type=neck_act_type,
         conf_thre=conf_thre,
         nms_thre=nms_thre,
         lr=lr,

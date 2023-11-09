@@ -1,8 +1,9 @@
 import math
-from typing import Tuple, List, Union, Optional
+from typing import Tuple, List, Union, Optional, Literal
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from jaxtyping import Float, Int
 
 from ..layers.network_blocks import BaseConv
@@ -13,6 +14,7 @@ class TA5Block(nn.Module):
     def __init__(
             self,
             in_channel: int,
+            neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
     ):
         super().__init__()
         self.fc_time_constant = nn.Sequential(
@@ -29,8 +31,18 @@ class TA5Block(nn.Module):
         self.fc_query = nn.Linear(in_channel, in_channel)
         self.fc_key = nn.Linear(in_channel, in_channel)
         self.p_attn = nn.Parameter(
-            torch.tensor(1.0).repeat(1, 1, in_channel, 1, 1), requires_grad=True
+            torch.tensor(0.5).repeat(1, 1, in_channel, 1, 1), requires_grad=True
         )
+        if neck_act_type == 'none':
+            self.act = nn.Identity()
+        elif neck_act_type == 'relu':
+            self.act = F.relu
+        elif neck_act_type == 'elu':
+            self.act = lambda x: 1 + F.elu(x)
+        elif neck_act_type == '1lu':
+            self.act = lambda x: 1 + F.elu(x - 1)
+        else:
+            raise ValueError(f'act_type {neck_act_type} not supported!')
 
     def forward(
             self,
@@ -64,6 +76,7 @@ class TA5Block(nn.Module):
 
         # B TF CHW
         attn_weight = attn_query @ attn_key.transpose(-2, -1) / math.sqrt(attn_query.size(1))
+        attn_weight = self.act(attn_weight)
         attn = attn_weight @ attn_value         # BHW TF C
         # attn = nn.functional.scaled_dot_product_attention(attn_query, attn_key, attn_value)
         # B TF C H W
@@ -78,11 +91,12 @@ class TA5Neck(BaseNeck):
     def __init__(
             self,
             in_channels: Tuple[int, ...],
+            neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
             **kwargs
     ):
         super().__init__()
         self.blocks = nn.ModuleList([
-            TA5Block(c)
+            TA5Block(c, neck_act_type=neck_act_type)
             for c in in_channels
         ])
 

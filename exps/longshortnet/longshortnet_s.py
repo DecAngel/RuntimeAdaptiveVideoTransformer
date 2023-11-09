@@ -1,6 +1,9 @@
+import json
 import os
 import sys
 from pathlib import Path
+
+from ravt.launchers.test import run_test
 
 root_dir = str(Path(__file__).parents[2].resolve())
 os.chdir(root_dir)
@@ -49,14 +52,26 @@ def main(
         conf_thre=0.01,
         nms_thre=0.65,
     )
-    system.load_from_pth(Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth')
-
-    res = run_train(
-        system, exp_tag=exp_tag, max_epoch=15,
-        batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-        callback_ema=True, callback_visualize=visualize, resume=None, seed=seed,
-    )
-    print(res)
+    train = True
+    if train:
+        system.load_from_pth(
+            Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
+        )
+        res = run_train(
+            system, exp_tag=exp_tag, max_epoch=15,
+            batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
+            callback_ema=True, callback_visualize=visualize, resume=None, seed=seed,
+        )
+    else:
+        system.load_from_ckpt(
+            Path(root_dir) / 'weights' / 'trained' / 'longshortnet_s_01234_mAP=0.28874_1739105476_061155.ckpt'
+        )
+        res = run_test(
+            system, exp_tag=exp_tag,
+            batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
+            callback_visualize=visualize, resume=None, seed=seed,
+        )
+    print(json.dumps(res, indent=2))
 
 
 if __name__ == '__main__':

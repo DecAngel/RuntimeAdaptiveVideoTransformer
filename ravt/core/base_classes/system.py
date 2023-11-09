@@ -62,14 +62,30 @@ class BaseSystem(pl.LightningModule):
                 logger.warning(f'Unexpected keys in ckpt: {unexpected_keys}')
             if len(misshaped_keys) > 0:
                 logger.warning(f'Misshaped keys in ckpt: {misshaped_keys}')
-            logger.info(f'File {file_path} loaded!')
+            logger.info(f'pth file {file_path} loaded!')
         else:
             raise FileNotFoundError(
-                f'File {file_path} not found!'
+                f'pth file {file_path} not found!'
             )
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
         raise NotImplementedError()
+
+    def load_from_ckpt(self, file_path: Union[str, Path]):
+        file_path = Path(file_path)
+        if file_path.exists():
+            self.load_state_dict(
+                torch.load(
+                    str(file_path),
+                    map_location=self.device
+                )['state_dict'],
+                strict=True,
+            )
+            logger.info(f'ckpt file {file_path} loaded!')
+        else:
+            raise FileNotFoundError(
+                f'ckpt file {file_path} not found!'
+            )
 
     def configure_optimizers(self) -> Tuple[List[Optimizer], List[LRScheduler]]:
         raise NotImplementedError()

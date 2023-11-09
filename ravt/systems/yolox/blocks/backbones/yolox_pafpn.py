@@ -29,7 +29,8 @@ class YOLOXPAFPNBackbone(BaseBackbone):
 
         # build network (hardcoded)
         self.backbone = CSPDarknet(
-            base_depth, base_channel,
+            base_depth=base_depth,
+            base_channel=base_channel,
             out_features=self.feature_names,
             depthwise=depthwise, act=act
         )

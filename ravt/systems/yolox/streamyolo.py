@@ -117,7 +117,7 @@ class StreamYOLOSystem(YOLOXBaseSystem):
             pred_dict['pred_coordinates'].cpu().numpy()[0],
             pred_dict['pred_probabilities'].cpu().numpy()[0, :, :, None],
             pred_dict['pred_labels'].cpu().numpy()[0, :, :, None].astype(float),
-        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), new_buffer
+        ], axis=2), axis=1, fixed_length=100, pad_value=0.0), new_buffer
 
 
 def streamyolo_s(

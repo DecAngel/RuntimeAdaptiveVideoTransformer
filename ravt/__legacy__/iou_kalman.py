@@ -3,8 +3,7 @@ from typing import Callable, Tuple
 import numpy as np
 
 from .base import BaseStrategy, BaseSystem
-from ..data_structures import NDArrayBoundingBox
-from f3fusion.utils.time_recorder import TimeRecorder
+from ravt.__legacy__.f3fusion import TimeRecorder
 
 
 class IOUKalmanStrategy(BaseStrategy):

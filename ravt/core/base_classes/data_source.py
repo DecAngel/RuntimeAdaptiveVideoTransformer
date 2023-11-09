@@ -1,8 +1,6 @@
 from pathlib import Path
 from typing import List
 
-from pycocotools.coco import COCO
-
 from ..constants import (
     ComponentDict,
     SubsetTypes, ComponentTypes

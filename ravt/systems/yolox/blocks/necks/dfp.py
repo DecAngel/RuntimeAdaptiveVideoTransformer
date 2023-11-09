@@ -30,7 +30,7 @@ class DFP(BaseNeck):
         outputs = []
         for i, conv in enumerate(self.convs):
             features_conv = conv(features[i].flatten(0, 1)).unflatten(0, (B, T)).flip(1)
-            features_conv = torch.cat([features_conv[:, :1], features_conv[:, 1:]], dim=2)
+            features_conv = torch.cat([features_conv[:, :1].expand(-1, T-1, -1, -1, -1), features_conv[:, 1:]], dim=2)
             outputs.append(features[i][:, -1:]+features_conv)
 
         return tuple(outputs)

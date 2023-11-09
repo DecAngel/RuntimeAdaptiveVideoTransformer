@@ -94,24 +94,17 @@ class SAPServer:
         self.proc.stdin.write(f'evaluate {results_file}\n')
         self.proc.stdin.flush()
 
-        """
-        keyword = 'Average Precision  (AP) @[ IoU=0.50:0.95 | area=   all | maxDets=100 ] = '
-        while True:
-            result = self.proc.stdout.readline()
-            if keyword in result:
-                index = result.find(keyword)
-                return float(result[index+len(keyword):index+len(keyword)+5])
-        """
         output_dict = {}
-        while self.proc.stdout.readable():
+        while True:
             output = self.proc.stdout.readline()
-            print(output)
             if '=' in output:
-                v, k = output.rsplit('=', 2)
+                o = output.rsplit('=')
                 try:
-                    output_dict[k] = float(v)
+                    output_dict['='.join(o[:-1])] = float(o[-1])
                 except ValueError:
                     pass
+            if 'Average Recall     (AR) @[ IoU=0.50:0.95 | area= large | maxDets=100 ]' in output:
+                break
         return output_dict
 
     def __exit__(self, exc_type, exc_val, exc_tb):
@@ -173,17 +166,18 @@ def run_sap(
             def resize_input(img: ImageInferenceType) -> ImageInferenceType:
                 h, w, c = img.shape
                 return cv2.resize(
-                    img, (w // dataset_resize_ratio, h // dataset_resize_ratio), interpolation=cv2.INTER_NEAREST
+                    img, (w // dataset_resize_ratio, h // dataset_resize_ratio)
                 )
 
             def recv_fn():
                 frame_id_next, frame = client.get_frame()
-                frame = resize_input(frame) if frame_id_next is not None else None
+                frame = resize_input(frame)[..., [2, 1, 0]] if frame_id_next is not None else None
                 return frame_id_next, frame
 
             def send_fn(array: BBoxInferenceType):
                 array = remove_pad_along(array, axis=0)
-                client.send_result_to_server(array[:, :4] * dataset_resize_ratio, array[:, 4], array[:, 5])
+                array[:, :4] *= dataset_resize_ratio
+                client.send_result_to_server(array[:, :4], array[:, 4], array[:, 5])
                 tr.record('output_fn')
                 return None
 
@@ -191,7 +185,8 @@ def run_sap(
                 return (time.perf_counter() - start_time) * dataset_fps
 
             # warm_up
-            system.inference(resize_input(np.zeros((1200, 1920, 3), dtype=np.int8)), None)
+            for _ in range(3):
+                system.inference(resize_input(np.zeros((1200, 1920, 3), dtype=np.uint8)), None)
 
             for seq_id in tqdm(seqs):
                 client.request_stream(seq_id)

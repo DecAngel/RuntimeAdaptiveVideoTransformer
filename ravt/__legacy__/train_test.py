@@ -202,7 +202,6 @@ class TrainTestLauncher(BaseLauncher):
             precision='16-mixed',
             enable_checkpointing=False,
             limit_test_batches=10 if self.debug else None,
-
             logger=False,
         )
         if self.batch_size is None:

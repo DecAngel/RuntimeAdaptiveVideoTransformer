@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from torchvision.ops import DeformConv2d
+from ..layers.deform_conv import DeformConv2dPack
 
 
 class SiLU(nn.Module):
@@ -212,13 +212,14 @@ class BasicBlock_3x3_Reverse_DCN(nn.Module):
         # self.conv1 = build_conv_layer(dcn, ch_hidden, ch_out, 3, stride=1, padding=1)
         # ? previous method based on mmcv
 
-        self.conv1 = DeformConv2d(
+        self.conv1 = DeformConv2dPack(
             in_channels  = ch_hidden,
             out_channels = ch_out,
             kernel_size  = 3,
             stride       = 1,
             padding      = 1,
-            groups       = 1
+            groups       = 1,
+            bias         = False,
         )
         # ! current method based on torchvision
 
@@ -482,20 +483,22 @@ class RepConv(nn.Module):
 class GiraffeNeckV2(nn.Module):
     def __init__(
         self,
-        depth=1.0,
-        hidden_ratio=1.0,
-        in_features=[2, 3, 4],
-        in_channels=[256, 512, 1024],
-        out_channels=[256, 512, 1024],
+        base_depth: int = 3,
+        base_channel: int = 64,
+        hidden_ratio: float = 1.0,
         act='silu',
-        spp=False,
-        block_name='BasicBlock',
         **kwargs
     ):
         super().__init__()
-        self.in_features = in_features
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        # hardcoded
+        in_channels = tuple(i * base_channel for i in (4, 8, 16))
+        out_channels = in_channels
+        dcn = True
+        spp = False
+        block_name = 'BasicBlock_3x3_Reverse'
+
+        kwargs['dcn'] = dcn
+
         Conv = ConvBNAct
 
         self.upsample = nn.Upsample(scale_factor=2, mode='nearest')
@@ -506,7 +509,7 @@ class GiraffeNeckV2(nn.Module):
                                 in_channels[1] + in_channels[2],
                                 hidden_ratio,
                                 in_channels[2],
-                                round(3 * depth),
+                                base_depth,
                                 act=act,
                                 spp=spp,
                                 **kwargs)
@@ -518,7 +521,7 @@ class GiraffeNeckV2(nn.Module):
                                 in_channels[2],
                                 hidden_ratio,
                                 in_channels[1],
-                                round(3 * depth),
+                                base_depth,
                                 act=act,
                                 spp=spp,
                                 **kwargs)
@@ -528,7 +531,7 @@ class GiraffeNeckV2(nn.Module):
                                 in_channels[1] + in_channels[0],
                                 hidden_ratio,
                                 out_channels[0],
-                                round(3 * depth),
+                                base_depth,
                                 act=act,
                                 spp=spp,
                                 **kwargs)
@@ -539,7 +542,7 @@ class GiraffeNeckV2(nn.Module):
                                 out_channels[0] + in_channels[1],
                                 hidden_ratio,
                                 out_channels[1],
-                                round(3 * depth),
+                                base_depth,
                                 act=act,
                                 spp=spp,
                                 **kwargs)
@@ -552,7 +555,7 @@ class GiraffeNeckV2(nn.Module):
                                 in_channels[2],
                                 hidden_ratio,
                                 out_channels[2],
-                                round(3 * depth),
+                                base_depth,
                                 act=act,
                                 spp=spp,
                                 **kwargs)

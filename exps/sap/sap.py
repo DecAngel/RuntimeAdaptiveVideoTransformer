@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 from pathlib import Path
@@ -16,13 +17,13 @@ from ravt.systems.data_sources import ArgoverseDataSource
 from ravt.systems.yolox import streamyolo_s
 from ravt.launchers.sap import run_sap
 
-torch.set_float32_matmul_precision('high')
+torch.set_float32_matmul_precision('highest')
 
 
 def main(seed: Optional[int] = None):
     seed = pl.seed_everything(seed)
     device_id = 1
-    sap_factor = 1.0
+    sap_factor = 1
 
     system = streamyolo_s(
         data_source=ArgoverseDataSource(),
@@ -35,19 +36,14 @@ def main(seed: Optional[int] = None):
         conf_thre=0.01,
         nms_thre=0.65,
     )
-    system.load_state_dict(
-        torch.load(
-            'weights/trained/streamyolo_plus_s_012_mAP=0.29998_3342393340_042133.ckpt',
-            map_location=torch.device(f'cuda:{device_id}')
-        )['state_dict'],
-        strict=True,
+    system.load_from_ckpt(
+        Path(root_dir) / 'weights' / 'trained' / 'streamyolo_plus_s_012_mAP=0.29998_3342393340_042133.ckpt'
     )
-
     res = run_sap(
         system, sap_factor=sap_factor, dataset_resize_ratio=2, dataset_fps=30,
-        device_id=0, seed=seed
+        device_id=device_id, seed=seed
     )
-    print(res)
+    print(json.dumps(res, indent=2))
 
 
 if __name__ == '__main__':
