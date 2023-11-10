@@ -143,7 +143,6 @@ class DAMOStreamNetSystem(YOLOXBaseSystem):
 def damo_streamnet_s(
         data_source: Optional[BaseDataSource] = None,
         strategy: Optional[BaseSAPStrategy] = None,
-
         predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 1,
@@ -163,25 +162,7 @@ def damo_streamnet_s(
         weight_decay: float = 5e-4,
         **kwargs
 ) -> DAMOStreamNetSystem:
-    return DAMOStreamNetSystem(
-        data_source=data_source,
-        strategy=strategy,
-        num_classes=num_classes,
-        predict_num=predict_num,
-        base_depth=base_depth,
-        base_channel=base_channel,
-        base_neck_depth=base_neck_depth,
-        hidden_ratio=hidden_ratio,
-        strides=strides,
-        in_channels=in_channels,
-        mid_channel=mid_channel,
-        depthwise=depthwise,
-        act=act,
-        max_objs=max_objs,
-        conf_thre=conf_thre,
-        nms_thre=nms_thre,
-        lr=lr,
-        momentum=momentum,
-        weight_decay=weight_decay,
-        **kwargs,
-    )
+    __d = locals().copy()
+    __d.update(kwargs)
+    del __d['kwargs']
+    return DAMOStreamNetSystem(**__d)

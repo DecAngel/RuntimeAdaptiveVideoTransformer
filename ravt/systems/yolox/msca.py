@@ -13,7 +13,7 @@ from ravt.core.utils.array_operations import clip_or_pad_along
 
 from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone, DAMOBackbone
-from .blocks.necks import TA5Neck
+from .blocks.necks import TANeck
 from .blocks.heads import TALHead
 from .blocks.schedulers import StreamYOLOScheduler
 from ..data_samplers import YOLOXDataSampler
@@ -44,7 +44,9 @@ class MSCASystem(YOLOXBaseSystem):
             backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
 
             # neck type
-            neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+            neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
+            neck_p_init: Optional[float] = None,
+            neck_dropout: float = 0.5,
 
             # train type
             train_mask: bool = False,
@@ -68,7 +70,7 @@ class MSCASystem(YOLOXBaseSystem):
 
         super().__init__(
             backbone=YOLOXPAFPNBackbone(**self.hparams) if backbone == 'pafpn' else DAMOBackbone(**self.hparams),
-            neck=TA5Neck(**self.hparams),
+            neck=TANeck(**self.hparams),
             head=TALHead(**self.hparams),
             with_bbox_0_train=True,
             data_source=data_source,
@@ -224,7 +226,7 @@ class MSCASystem(YOLOXBaseSystem):
                 else:
                     p_wd.append(v.weight)  # apply decay
             # neck
-            if hasattr(v, 'p_attn'):
+            if hasattr(v, 'p_attn') and getattr(v, 'p_attn').requires_grad is True:
                 p_add.append(v.p_attn)
         optimizer = torch.optim.SGD(
             [
@@ -232,7 +234,7 @@ class MSCASystem(YOLOXBaseSystem):
                 {'params': p_wd, 'weight_decay': self.hparams.weight_decay},
                 {'params': p_normal_lr, 'lr': self.hparams.lr * 5},
                 {'params': p_wd_lr, 'lr': self.hparams.lr * 5, 'weight_decay': self.hparams.weight_decay},
-                {'params': p_add, 'lr': self.hparams.lr * 30}
+                {'params': p_add, 'lr': self.hparams.lr * 100}
             ],
             lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True
         )
@@ -271,7 +273,9 @@ def msca_s(
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
         backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
-        neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+        neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
+        neck_p_init: Optional[float] = None,
+        neck_dropout: float = 0.5,
         train_mask: bool = False,
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
@@ -280,29 +284,7 @@ def msca_s(
         weight_decay: float = 5e-4,
         **kwargs
 ) -> MSCASystem:
-    return MSCASystem(
-        data_source=data_source,
-        strategy=strategy,
-        num_classes=num_classes,
-        past_time_constant=past_time_constant,
-        future_time_constant=future_time_constant,
-        base_depth=base_depth,
-        base_channel=base_channel,
-        base_neck_depth=base_neck_depth,
-        hidden_ratio=hidden_ratio,
-        strides=strides,
-        in_channels=in_channels,
-        mid_channel=mid_channel,
-        depthwise=depthwise,
-        act=act,
-        max_objs=max_objs,
-        backbone=backbone,
-        neck_act_type=neck_act_type,
-        train_mask=train_mask,
-        conf_thre=conf_thre,
-        nms_thre=nms_thre,
-        lr=lr,
-        momentum=momentum,
-        weight_decay=weight_decay,
-        **kwargs,
-    )
+    __d = locals().copy()
+    __d.update(kwargs)
+    del __d['kwargs']
+    return MSCASystem(**__d)

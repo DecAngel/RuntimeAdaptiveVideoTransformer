@@ -10,11 +10,13 @@ from ..layers.network_blocks import BaseConv
 from ..types import PYRAMID, BaseNeck, TIME
 
 
-class TA5Block(nn.Module):
+class TABlock(nn.Module):
     def __init__(
             self,
             in_channel: int,
-            neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+            neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
+            neck_p_init: Optional[float] = None,
+            neck_dropout: float = 0.5,
     ):
         super().__init__()
         self.fc_time_constant = nn.Sequential(
@@ -31,12 +33,16 @@ class TA5Block(nn.Module):
         self.fc_query = nn.Linear(in_channel, in_channel)
         self.fc_key = nn.Linear(in_channel, in_channel)
         self.p_attn = nn.Parameter(
-            torch.tensor(0.5).repeat(1, 1, in_channel, 1, 1), requires_grad=True
-        )
+            torch.tensor(neck_p_init, dtype=torch.float32).repeat(1, 1, in_channel, 1, 1), requires_grad=True
+        ) if neck_p_init is not None else nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=False)
+        self.p_dropout = nn.Dropout(p=neck_dropout)
+
         if neck_act_type == 'none':
             self.act = nn.Identity()
+        elif neck_act_type == 'softmax':
+            self.act = nn.Softmax()
         elif neck_act_type == 'relu':
-            self.act = F.relu
+            self.act = nn.ReLU()
         elif neck_act_type == 'elu':
             self.act = lambda x: 1 + F.elu(x)
         elif neck_act_type == '1lu':
@@ -78,7 +84,8 @@ class TA5Block(nn.Module):
         attn_weight = attn_query @ attn_key.transpose(-2, -1) / math.sqrt(attn_query.size(1))
         attn_weight = self.act(attn_weight)
         if self.training:
-            self.attn_weight = torch.mean(attn_weight, dim=0)
+            self.attn_weight = attn_weight[0]
+        attn_weight = self.p_dropout(attn_weight)
         attn = attn_weight @ attn_value         # BHW TF C
         # attn = nn.functional.scaled_dot_product_attention(attn_query, attn_key, attn_value)
         # B TF C H W
@@ -89,16 +96,23 @@ class TA5Block(nn.Module):
         return feature_f
 
 
-class TA5Neck(BaseNeck):
+class TANeck(BaseNeck):
     def __init__(
             self,
             in_channels: Tuple[int, ...],
-            neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+            neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
+            neck_p_init: Optional[float] = None,
+            neck_dropout: float = 0.5,
             **kwargs
     ):
         super().__init__()
         self.blocks = nn.ModuleList([
-            TA5Block(c, neck_act_type=neck_act_type)
+            TABlock(
+                c,
+                neck_act_type=neck_act_type,
+                neck_p_init=neck_p_init,
+                neck_dropout=neck_dropout,
+            )
             for c in in_channels
         ])
 

@@ -26,7 +26,9 @@ torch.set_float32_matmul_precision('high')
 def main(
         exp_tag: str, past_time_constant: List[int], future_time_constant: List[int],
         backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
-        neck_act_type: Literal['none', 'relu', 'elu', '1lu'] = 'none',
+        neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
+        neck_p_init: Optional[float] = None,
+        neck_dropout: float = 0.5,
         train_mask: bool = False,
         enable_cache: bool = True, seed: Optional[int] = None,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
@@ -37,6 +39,8 @@ def main(
     :param past_time_constant:
     :param future_time_constant:
     :param neck_act_type:
+    :param neck_dropout:
+    :param neck_p_init:
     :param backbone:
     :param train_mask:
     :param enable_cache: use shared memory allocator
@@ -56,6 +60,8 @@ def main(
         future_time_constant=future_time_constant,
         backbone=backbone,
         neck_act_type=neck_act_type,
+        neck_p_init=neck_p_init,
+        neck_dropout=neck_dropout,
         train_mask=train_mask,
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
