@@ -53,3 +53,12 @@ class TimeRecorder:
 
     def print(self):
         print(self.__str__(), file=self.file)
+
+    def plot(self):
+        import matplotlib.pyplot as plt
+        from ..configs import output_visualize_dir
+        options = ['.-b', '.-g', '.-r', '.-c', '.-m', '.-y', '.-k']
+        plt.figure()
+        for i, (k, v) in enumerate(self.t.items()):
+            plt.plot(v, options[i], label=k)
+        plt.savefig(str(output_visualize_dir.joinpath(f'{self.description}.png')))

@@ -166,3 +166,63 @@ def damo_streamnet_s(
     __d.update(kwargs)
     del __d['kwargs']
     return DAMOStreamNetSystem(**__d)
+
+
+def damo_streamnet_m(
+        data_source: Optional[BaseDataSource] = None,
+        strategy: Optional[BaseSAPStrategy] = None,
+        predict_num: int = 1,
+        num_classes: int = 8,
+        base_depth: int = 2,
+        base_channel: int = 48,
+        base_neck_depth: int = 3,
+        hidden_ratio: float = 1.0,
+        strides: Tuple[int, ...] = (8, 16, 32),
+        in_channels: Tuple[int, ...] = (192, 384, 768),
+        mid_channel: int = 192,
+        depthwise: bool = False,
+        act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
+        max_objs: int = 100,
+        conf_thre: float = 0.01,
+        nms_thre: float = 0.65,
+        lr: float = 0.001,
+        momentum: float = 0.9,
+        weight_decay: float = 5e-4,
+        ignore_thr: float = 0.4,
+        ignore_value: float = 1.7,
+        **kwargs
+) -> DAMOStreamNetSystem:
+    __d = locals().copy()
+    __d.update(kwargs)
+    del __d['kwargs']
+    return DAMOStreamNetSystem(**__d)
+
+
+def damo_streamnet_l(
+        data_source: Optional[BaseDataSource] = None,
+        strategy: Optional[BaseSAPStrategy] = None,
+        predict_num: int = 1,
+        num_classes: int = 8,
+        base_depth: int = 3,
+        base_channel: int = 64,
+        base_neck_depth: int = 3,
+        hidden_ratio: float = 1.0,
+        strides: Tuple[int, ...] = (8, 16, 32),
+        in_channels: Tuple[int, ...] = (256, 512, 1024),
+        mid_channel: int = 256,
+        depthwise: bool = False,
+        act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
+        max_objs: int = 100,
+        conf_thre: float = 0.01,
+        nms_thre: float = 0.65,
+        lr: float = 0.001,
+        momentum: float = 0.9,
+        weight_decay: float = 5e-4,
+        ignore_thr: float = 0.5,
+        ignore_value: float = 1.6,
+        **kwargs
+) -> DAMOStreamNetSystem:
+    __d = locals().copy()
+    __d.update(kwargs)
+    del __d['kwargs']
+    return DAMOStreamNetSystem(**__d)

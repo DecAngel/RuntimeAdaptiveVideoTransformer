@@ -55,6 +55,7 @@ class BaseSystem(pl.LightningModule):
                     del state_dict[k]
 
             missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
+            missing_keys = list(filter(lambda key: key not in misshaped_keys, missing_keys))
 
             if len(missing_keys) > 0:
                 logger.warning(f'Missing keys in ckpt: {missing_keys}')

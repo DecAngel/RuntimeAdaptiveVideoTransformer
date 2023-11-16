@@ -7,7 +7,7 @@ from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BBoxInf
 
 
 class DynamicSchedulingStrategy(BaseSAPStrategy):
-    def infer_sequence(
+    def infer_sequence_impl(
             self,
             input_fn: Callable[[], Tuple[Optional[int], ImageInferenceType]],
             process_fn: Callable[

@@ -6,7 +6,24 @@ from ravt.core.base_classes import BaseSAPStrategy
 from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BBoxInferenceType
 
 
-class MSCASchedulingStrategy(BaseSAPStrategy):
+class MSCAPlusSchedulingStrategy(BaseSAPStrategy):
+    def __init__(self):
+        super().__init__()
+        self.time_precision = 0.001
+        self.predicted_frame_id = 0
+        self.predicted_results: List[BBoxInferenceType] = []
+        self.worker_switch = False
+
+    def output_worker(self, output_fn: Callable[[BBoxInferenceType], None], time_fn: Callable[[], float]):
+        while self.worker_switch:
+            cur_time = time_fn()
+            if cur_time < self.predicted_frame_id - self.time_precision * 2:
+                # not yet
+                pass
+            elif len(self.predicted_results) > 0:
+                # output
+                pass
+
     def infer_sequence_impl(
             self,
             input_fn: Callable[[], Tuple[Optional[int], ImageInferenceType]],

@@ -1,10 +1,10 @@
 import math
-from typing import Tuple, List, Union, Optional, Literal
+from typing import Tuple, Union, Optional, Literal
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from jaxtyping import Float, Int
+from jaxtyping import Float
 
 from ..layers.network_blocks import BaseConv
 from ..types import PYRAMID, BaseNeck, TIME
@@ -15,7 +15,8 @@ class TABlock(nn.Module):
             self,
             in_channel: int,
             neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
-            neck_p_init: Optional[float] = None,
+            neck_p_init: Union[float, Literal['uniform', 'normal'], None] = None,
+            neck_tpe_merge: Literal['add', 'mul'] = 'add',
             neck_dropout: float = 0.5,
     ):
         super().__init__()
@@ -32,15 +33,29 @@ class TABlock(nn.Module):
         self.spatial_avg_pool = nn.AdaptiveAvgPool2d((1, 1))
         self.fc_query = nn.Linear(in_channel, in_channel)
         self.fc_key = nn.Linear(in_channel, in_channel)
-        self.p_attn = nn.Parameter(
-            torch.tensor(neck_p_init, dtype=torch.float32).repeat(1, 1, in_channel, 1, 1), requires_grad=True
-        ) if neck_p_init is not None else nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=False)
+        if neck_p_init is None:
+            self.p_attn = nn.Parameter(torch.tensor(1.0, dtype=torch.float32), requires_grad=False)
+        elif isinstance(neck_p_init, (int, float)):
+            self.p_attn = nn.Parameter(
+                torch.tensor(neck_p_init, dtype=torch.float32).repeat(1, 1, in_channel, 1, 1), requires_grad=True
+            )
+        elif neck_p_init == 'uniform':
+            stdv = 1. / math.sqrt(in_channel)
+            self.p_attn = nn.Parameter(torch.zeros(1, 1, in_channel, 1, 1, dtype=torch.float32), requires_grad=True)
+            nn.init.uniform_(self.p_attn, -stdv, stdv)
+        elif neck_p_init == 'normal':
+            stdv = 1. / math.sqrt(in_channel)
+            self.p_attn = nn.Parameter(torch.zeros(1, 1, in_channel, 1, 1, dtype=torch.float32), requires_grad=True)
+            nn.init.trunc_normal_(self.p_attn, 0, stdv, -2*stdv, 2*stdv)
+        else:
+            raise ValueError(f'neck_p_init {neck_p_init} not supported!')
+        self.tpe_merge = neck_tpe_merge
         self.p_dropout = nn.Dropout(p=neck_dropout)
 
         if neck_act_type == 'none':
             self.act = nn.Identity()
         elif neck_act_type == 'softmax':
-            self.act = nn.Softmax()
+            self.act = nn.Softmax(dim=-1)
         elif neck_act_type == 'relu':
             self.act = nn.ReLU()
         elif neck_act_type == 'elu':
@@ -61,7 +76,7 @@ class TABlock(nn.Module):
         TF = future_time_constant.size(1)
 
         feature_p = self.conv_p(feature.flatten(0, 1)).unflatten(0, (B, TP + 1))    # B TP C H W
-        feature_f = feature[:, -1:].expand(-1, TF, -1, -1, -1)                      # B TF C H W
+        feature_f = feature_p[:, -1:].expand(-1, TF, -1, -1, -1)                      # B TF C H W
         ptc = self.fc_time_constant(past_time_constant[..., None])                  # B TP C
         ftc = self.fc_time_constant(future_time_constant[..., None])                # B TF C
 
@@ -69,12 +84,19 @@ class TABlock(nn.Module):
         attn_in_p = feature_p[:, :-1].flatten(0, 1)
         attn_in_p = torch.cat([self.spatial_max_pool(attn_in_p), self.spatial_avg_pool(attn_in_p)], dim=1)
         attn_in_p = attn_in_p.unflatten(0, (B, TP)).squeeze(-1).squeeze(-1)
-        attn_in_p = self.fc_in(attn_in_p) + ptc
+        if self.tpe_merge == 'add':
+            attn_in_p = self.fc_in(attn_in_p) + ptc
+        else:
+            attn_in_p = self.fc_in(attn_in_p) * ptc
+
         # B TF C
         attn_in_f = feature_f.flatten(0, 1)
         attn_in_f = torch.cat([self.spatial_max_pool(attn_in_f), self.spatial_avg_pool(attn_in_f)], dim=1)
         attn_in_f = attn_in_f.unflatten(0, (B, TF)).squeeze(-1).squeeze(-1)
-        attn_in_f = self.fc_in(attn_in_f) + ftc
+        if self.tpe_merge == 'add':
+            attn_in_f = self.fc_in(attn_in_f) + ftc
+        else:
+            attn_in_f = self.fc_in(attn_in_f) * ftc
 
         attn_query = self.fc_query(attn_in_f)                                       # B TF C
         attn_key = self.fc_key(attn_in_p)                                           # B TP C
@@ -91,9 +113,9 @@ class TABlock(nn.Module):
         # B TF C H W
         attn = attn.unflatten(2, (C, H, W))
         # B TF C H W
-        feature_f = feature_f + attn * self.p_attn / attn_key.size(1)
+        pred = feature[:, -1:] + attn * self.p_attn / attn_key.size(1)
 
-        return feature_f
+        return pred
 
 
 class TANeck(BaseNeck):
@@ -101,7 +123,8 @@ class TANeck(BaseNeck):
             self,
             in_channels: Tuple[int, ...],
             neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
-            neck_p_init: Optional[float] = None,
+            neck_p_init: Union[float, Literal['uniform', 'normal'], None] = None,
+            neck_tpe_merge: Literal['add', 'mul'] = 'add',
             neck_dropout: float = 0.5,
             **kwargs
     ):
@@ -111,6 +134,7 @@ class TANeck(BaseNeck):
                 c,
                 neck_act_type=neck_act_type,
                 neck_p_init=neck_p_init,
+                neck_tpe_merge=neck_tpe_merge,
                 neck_dropout=neck_dropout,
             )
             for c in in_channels

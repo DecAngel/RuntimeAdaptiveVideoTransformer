@@ -30,6 +30,9 @@ class TALHead(BaseHead):
         max_objs: int = 100,
         act: str = "silu",
         depthwise: bool = False,
+        gamma: float = 1.0,
+        ignore_thr: float = 0.5,
+        ignore_value: float = 1.5,
         **kwargs
     ):
         """
@@ -38,10 +41,6 @@ class TALHead(BaseHead):
             depthwise (bool): whether apply depthwise conv in conv branch. Defalut value: False.
         """
         super().__init__()
-
-        gamma = 1.0
-        ignore_thr = 0.5
-        ignore_value = 1.5
 
         self.gamma = gamma
         self.ignore_thr = ignore_thr
@@ -375,32 +374,37 @@ class TALHead(BaseHead):
                 gt_classes = labels[0][batch_idx, :num_gt, 0]
                 bboxes_preds_per_image = bbox_preds[batch_idx]
 
-                try:
-                    (
-                        gt_matched_classes,
-                        fg_mask,
-                        pred_ious_this_matching,
-                        matched_gt_inds,
-                        num_fg_img,
-                    ) = self.get_assignments(  # noqa
-                        batch_idx,
-                        num_gt,
-                        total_num_anchors,
-                        gt_bboxes_per_image,
-                        gt_classes,
-                        bboxes_preds_per_image,
-                        expanded_strides,
-                        x_shifts,
-                        y_shifts,
-                        cls_preds,
-                        bbox_preds,
-                        obj_preds,
-                        labels,
-                        imgs,
-                    )
-                except RuntimeError as e:
+                for _ in range(3):
+                    try:
+                        (
+                            gt_matched_classes,
+                            fg_mask,
+                            pred_ious_this_matching,
+                            matched_gt_inds,
+                            num_fg_img,
+                        ) = self.get_assignments(  # noqa
+                            batch_idx,
+                            num_gt,
+                            total_num_anchors,
+                            gt_bboxes_per_image,
+                            gt_classes,
+                            bboxes_preds_per_image,
+                            expanded_strides,
+                            x_shifts,
+                            y_shifts,
+                            cls_preds,
+                            bbox_preds,
+                            obj_preds,
+                            labels,
+                            imgs,
+                        )
+                        break
+                    except RuntimeError as e:
+                        logger.error('OOM triggerred, retrying')
+                        torch.cuda.empty_cache()
+                else:
                     logger.error(
-                        "OOM RuntimeError is raised due to the huge memory cost during label assignment. \
+                        "Retry failed for 3 times. OOM RuntimeError is raised due to the huge memory cost during label assignment. \
                            CPU mode is applied in this batch. If you want to avoid this issue, \
                            try to reduce the batch size or image size.", exc_info=e
                     )

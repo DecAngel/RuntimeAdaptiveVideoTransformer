@@ -5,7 +5,7 @@ from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BBoxInf
 
 
 class NormalStrategy(BaseSAPStrategy):
-    def infer_sequence(
+    def infer_sequence_impl(
             self,
             input_fn: Callable[[], Tuple[Optional[int], ImageInferenceType]],
             process_fn: Callable[
@@ -26,5 +26,6 @@ class NormalStrategy(BaseSAPStrategy):
                 continue
             else:
                 current_fid = fid
-            res, buffer = process_fn(frame, buffer, None, None)
+
+            res, buffer = process_fn(frame, buffer, [-1], [1])
             output_fn(res[0])

@@ -2,6 +2,7 @@ import contextlib
 import functools
 import io
 import json
+import signal
 import sys
 import os
 import platform
@@ -118,10 +119,11 @@ class SAPClient(EvalClient):
     def generate(self, results_file='results.json'):
         self.result_stub.GenResults(eval_server_pb2.String(value=results_file))
 
-    def close(self, results_file='results.json'):
+    def close(self):
         self.result_channel.close()
         self.existing_shm.close()
         self.results_shm.close()
+        print('Shutdown', flush=True)
 
 
 def run_sap(
@@ -155,13 +157,14 @@ def run_sap(
         )
         client = SAPClient(json.loads(server.config_path.read_text()), client_state, verbose=True)
         client.stream_start_time = mp.Value('d', 0.0, lock=True)
+        signal.signal(signal.SIGINT, client.close)
+        signal.signal(signal.SIGTERM, client.close)
 
         try:
             # load coco dataset
             with contextlib.redirect_stdout(io.StringIO()):
                 coco = COCO(str(system.data_source.get_ann_file('test')))
             seqs = coco.dataset['sequences']
-            tr = TimeRecorder('SAP Profile', mode='avg')
 
             def resize_input(img: ImageInferenceType) -> ImageInferenceType:
                 h, w, c = img.shape
@@ -178,20 +181,19 @@ def run_sap(
                 array = remove_pad_along(array, axis=0)
                 array[:, :4] *= dataset_resize_ratio
                 client.send_result_to_server(array[:, :4], array[:, 4], array[:, 5])
-                tr.record('output_fn')
                 return None
 
             def time_fn(start_time: float):
-                return (time.perf_counter() - start_time) * dataset_fps
+                return (time.perf_counter() - start_time) * dataset_fps * sap_factor
 
             # warm_up
-            for _ in range(3):
+            for _ in range(2):
                 system.inference(resize_input(np.zeros((1200, 1920, 3), dtype=np.uint8)), None)
+            torch.cuda.synchronize(device=torch.device(f'cuda:{device_id or 0}'))
 
-            for seq_id in tqdm(seqs):
+            for i, seq_id in enumerate(tqdm(seqs)):
                 client.request_stream(seq_id)
                 t_start = client.get_stream_start_time()
-                tr.record()
                 system.strategy.infer_sequence(
                     input_fn=recv_fn,
                     process_fn=system.inference,
@@ -199,8 +201,8 @@ def run_sap(
                     time_fn=functools.partial(time_fn, t_start)
                 )
                 client.stop_stream()
-
-            tr.print()
+                if i == 0:
+                    system.strategy.summary()
             filename = f'{seed}_{int(time.time()) % 10000}.json'
             client.generate(filename)
             return server.get_result(filename)

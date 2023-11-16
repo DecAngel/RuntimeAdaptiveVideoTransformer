@@ -17,7 +17,7 @@ import fire
 import pytorch_lightning as pl
 
 from ravt.systems.data_sources import ArgoverseDataSource
-from ravt.systems.yolox import yolox_s
+from ravt.systems.yolox import yolox_m
 from ravt.launchers.train import run_train
 
 torch.set_float32_matmul_precision('high')
@@ -28,7 +28,7 @@ def main(
         train: bool = True,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
-    """ Train or test yolox_s model on Argoverse-HD
+    """ Train and test yolox_m model on Argoverse-HD
 
     :param train:
     :param exp_tag: the tag for the experiment
@@ -44,7 +44,7 @@ def main(
     seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
-    system = yolox_s(
+    system = yolox_m(
         data_source=ArgoverseDataSource(enable_cache=enable_cache),
         predict_num=predict_num,
         num_classes=8,
@@ -56,7 +56,7 @@ def main(
     )
     if train:
         system.load_from_pth(
-            Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
+            Path(root_dir) / 'weights' / 'pretrained' / 'yolox_m.pth'
         )
         res = run_train(
             system, exp_tag=exp_tag, max_epoch=15,
@@ -65,7 +65,7 @@ def main(
         )
     else:
         system.load_from_ckpt(
-            Path(root_dir) / 'weights' / 'trained' / 'yolox_s_01_mAP=0.26261_3342393340_050133.ckpt'
+            Path(root_dir) / 'weights' / 'trained' / 'yolox_m_01_mAP=0.29737_3342393340_151820.ckpt'
         )
         res = run_test(
             system, exp_tag=exp_tag,

@@ -1,4 +1,9 @@
+import random
+import uuid
+
+import numpy as np
 import pytorch_lightning as pl
+import torch
 from torch.utils.data import Dataset, default_collate, DataLoader
 
 from ..constants import BatchDict, SubsetTypes, ComponentTypes
@@ -46,7 +51,11 @@ class LocalDataModule(pl.LightningDataModule):
         def worker_init_fn(worker_id: int) -> None:
             import torch.multiprocessing
             torch.multiprocessing.set_sharing_strategy('file_system')
-            logger.debug(f'Initializing worker {worker_id}')
+            seed = uuid.uuid4().int % 2 ** 32
+            random.seed(seed)
+            torch.set_rng_state(torch.manual_seed(seed).get_state())
+            np.random.seed(seed)
+            logger.info(f'Initializing worker {worker_id} with seed {seed}')
 
         self.worker_init_fn = worker_init_fn
 

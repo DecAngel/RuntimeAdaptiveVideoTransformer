@@ -25,10 +25,12 @@ torch.set_float32_matmul_precision('high')
 
 def main(
         exp_tag: str, predict_num: int = 1, enable_cache: bool = True, seed: Optional[int] = None,
+        train: bool = True,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
     """ Train and test damo_streamnet_s model on Argoverse-HD
 
+    :param train:
     :param exp_tag: the tag for the experiment
     :param predict_num: predict offset for the model
     :param enable_cache: use shared memory allocator
@@ -52,7 +54,6 @@ def main(
         conf_thre=0.01,
         nms_thre=0.65,
     )
-    train = True
     if train:
         system.load_from_pth(
             Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s_drfpn.pth'

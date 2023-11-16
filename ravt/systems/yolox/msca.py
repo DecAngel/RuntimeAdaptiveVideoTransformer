@@ -1,4 +1,3 @@
-import itertools
 import random
 from typing import Optional, Tuple, Literal, List, Union, Dict
 
@@ -10,12 +9,13 @@ from torch import nn
 from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
 from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchDict, PredDict, LossDict
 from ravt.core.utils.array_operations import clip_or_pad_along
+from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone, DAMOBackbone
-from .blocks.necks import TANeck
+from .blocks.necks import TANeck, TA2Neck, TA3Neck
 from .blocks.heads import TALHead
-from .blocks.schedulers import StreamYOLOScheduler
+from .blocks.schedulers import StreamYOLOScheduler, MSCAScheduler
 from ..data_samplers import YOLOXDataSampler
 from ..metrics import COCOEvalMAPMetric
 from ..transforms import KorniaAugmentation
@@ -44,12 +44,15 @@ class MSCASystem(YOLOXBaseSystem):
             backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
 
             # neck type
-            neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
-            neck_p_init: Optional[float] = None,
-            neck_dropout: float = 0.5,
+            neck_type: Literal['ta', 'ta2', 'ta3'] = 'ta',
+            neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'relu',
+            neck_p_init: Union[float, Literal['uniform', 'normal'], None] = 0.0,
+            neck_tpe_merge: Literal['add', 'mul'] = 'add',
+            neck_dropout: float = 0.0,
 
             # train type
             train_mask: bool = False,
+            train_scheduler: Literal['yolox', 'msca'] = 'yolox',
 
             # predict parameters
             past_time_constant: List[int] = None,
@@ -68,9 +71,18 @@ class MSCASystem(YOLOXBaseSystem):
     ):
         self.save_hyperparameters(ignore=['kwargs', 'data_source', 'strategy'])
 
+        if neck_type == 'ta':
+            NECK = TANeck
+        elif neck_type == 'ta2':
+            NECK = TA2Neck
+        elif neck_type == 'ta3':
+            NECK = TA3Neck
+        else:
+            raise ValueError(f'neck type {neck_type} not supported!')
+
         super().__init__(
             backbone=YOLOXPAFPNBackbone(**self.hparams) if backbone == 'pafpn' else DAMOBackbone(**self.hparams),
-            neck=TANeck(**self.hparams),
+            neck=NECK(**self.hparams),
             head=TALHead(**self.hparams),
             with_bbox_0_train=True,
             data_source=data_source,
@@ -149,7 +161,7 @@ class MSCASystem(YOLOXBaseSystem):
             past_features = []
 
         if past_time_constant is None:
-            default_max_past = 3
+            default_max_past = 1
             default_interval = 1
             ptc = [p-default_interval for p in past_indices[-default_max_past:]]
             pf = past_features[-default_max_past:]
@@ -175,7 +187,7 @@ class MSCASystem(YOLOXBaseSystem):
                 future_time_constant=torch.tensor([ftc], dtype=torch.float32, device=self.device),
             )
         else:
-            features = concat_pyramids([features]*len(future_time_constant))
+            features = concat_pyramids([features]*len(ftc))
         pred_dict = self.head(features, shape=images.shape[-2:])
 
         return clip_or_pad_along(np.concatenate([
@@ -190,14 +202,19 @@ class MSCASystem(YOLOXBaseSystem):
     ) -> Union[PredDict, LossDict]:
         if self.hparams.train_mask and self.training:
             # random mask past and future
+            MAX_P = 3
+            MAX_F = 1
             TP = batch['image']['clip_id'].size(1) - 1
-            image_masks = random.sample(range(TP), k=random.randint(1, TP)) + [TP]
+            TF = batch['bbox']['clip_id'].size(1) - 1
+            SAMPLE_P = min(TP, MAX_P)
+            SAMPLE_F = min(TF, MAX_F)
+
+            image_masks = random.sample(range(SAMPLE_P), k=random.randint(1, SAMPLE_P)) + [TP]
             image_masks.sort()
             for k in batch['image'].keys():
                 batch['image'][k] = batch['image'][k][:, image_masks]
 
-            TF = batch['bbox']['clip_id'].size(1) - 1
-            bbox_masks = [0] + random.sample(range(1, TF+1), k=random.randint(1, TF))
+            bbox_masks = [0] + random.sample(range(1, SAMPLE_F+1), k=random.randint(1, SAMPLE_F))
             bbox_masks.sort()
             for k in batch['bbox'].keys():
                 batch['bbox'][k] = batch['bbox'][k][:, bbox_masks]
@@ -210,49 +227,75 @@ class MSCASystem(YOLOXBaseSystem):
         all_parameters.extend(self.neck.named_modules(prefix='neck'))
         all_parameters.extend(self.head.named_modules(prefix='head'))
         for k, v in all_parameters:
-            if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
-                if 'neck' in k or 'head' in k:
-                    p_normal_lr.append(v.bias)
-                else:
-                    p_normal.append(v.bias)
-            if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)) or 'bn' in k:
-                if 'neck' in k or 'head' in k:
-                    p_normal_lr.append(v.weight)
-                else:
-                    p_normal.append(v.weight)
-            elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
-                if 'neck' in k or 'head' in k:
-                    p_wd_lr.append(v.weight)
-                else:
-                    p_wd.append(v.weight)  # apply decay
             # neck
             if hasattr(v, 'p_attn') and getattr(v, 'p_attn').requires_grad is True:
                 p_add.append(v.p_attn)
+                logger.info(f'p_add: {k}')
+            elif ('fc_out_list' in k or 'fc_query' in k or 'fc_key' in k) and hasattr(v, 'weight'):
+                p_add.append(v.weight)
+                if hasattr(v, 'bias'):
+                    p_add.append(v.bias)
+                logger.info(f'p_add: {k}')
+            else:
+                if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+                    if 'neck' in k or 'head' in k:
+                        p_normal_lr.append(v.bias)
+                    else:
+                        p_normal.append(v.bias)
+                if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)) or 'bn' in k:
+                    if 'neck' in k or 'head' in k:
+                        p_normal_lr.append(v.weight)
+                    else:
+                        p_normal.append(v.weight)
+                elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
+                    if 'neck' in k or 'head' in k:
+                        p_wd_lr.append(v.weight)
+                    else:
+                        p_wd.append(v.weight)  # apply decay
         optimizer = torch.optim.SGD(
             [
                 {'params': p_normal},
                 {'params': p_wd, 'weight_decay': self.hparams.weight_decay},
                 {'params': p_normal_lr, 'lr': self.hparams.lr * 5},
                 {'params': p_wd_lr, 'lr': self.hparams.lr * 5, 'weight_decay': self.hparams.weight_decay},
-                {'params': p_add, 'lr': self.hparams.lr * 100}
+                {'params': p_add, 'lr': self.hparams.lr * 50}
             ],
             lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True
         )
-        scheduler = StreamYOLOScheduler(
-            optimizer,
-            int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs)
-        )
+        if self.hparams.train_scheduler == 'yolox':
+            scheduler = StreamYOLOScheduler(
+                optimizer,
+                int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs)
+            )
+        elif self.hparams.train_scheduler == 'msca':
+            scheduler = MSCAScheduler(
+                optimizer,
+                int(self.trainer.estimated_stepping_batches / self.trainer.max_epochs)
+            )
+        else:
+            raise ValueError(f'scheduler {self.hparams.scheduler} not supported!')
 
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
 
     def on_train_batch_end(self, outputs, batch, batch_idx: int) -> None:
         super().on_train_batch_end(outputs, batch, batch_idx)
-        p_attn = torch.cat([b.p_attn.flatten() for b in self.neck.blocks])
-        self.log_dict({'p_mean': torch.mean(p_attn), 'p_std': torch.std(p_attn)}, on_step=True)
-        attn_weight = torch.mean(torch.stack([b.attn_weight for b in self.neck.blocks], dim=0), dim=0)
-        for f, w in enumerate(attn_weight):
-            for p, ww in enumerate(w):
-                self.log(f'w_{f}_{p}', ww, on_step=True)
+        if self.hparams.neck_type == 'ta':
+            p_attn = torch.cat([b.p_attn.flatten() for b in self.neck.blocks])
+            self.log_dict({'p_mean': torch.mean(p_attn), 'p_std': torch.std(p_attn)}, on_step=True)
+            attn_weight = torch.mean(torch.stack([b.attn_weight for b in self.neck.blocks], dim=0), dim=0)
+            for f, w in enumerate(attn_weight.flip(0)):
+                for p, ww in enumerate(w):
+                    if f == p == 0:
+                        self.log(f'w_-{p}_+{f}', ww, on_step=True, prog_bar=True)
+                    else:
+                        self.log(f'w_-{p}_+{f}', ww, on_step=True)
+        elif self.hparams.neck_type == 'ta2':
+            """
+            attn_weight = self.neck.vis_attn_weight
+            for f, w in enumerate(attn_weight.flip(0)):
+                for p, ww in enumerate(w):
+                    self.log(f'w_-{p}_+{f}', ww, on_step=True, prog_bar=True)
+            """
 
 
 def msca_s(
@@ -273,15 +316,98 @@ def msca_s(
         act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
         max_objs: int = 100,
         backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
-        neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'none',
-        neck_p_init: Optional[float] = None,
-        neck_dropout: float = 0.5,
+        neck_type: Literal['ta', 'ta2', 'ta3'] = 'ta',
+        neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'relu',
+        neck_p_init: Union[float, Literal['uniform', 'normal'], None] = 0.0,
+        neck_tpe_merge: Literal['add', 'mul'] = 'add',
+        neck_dropout: float = 0.0,
         train_mask: bool = False,
+        train_scheduler: Literal['yolox', 'msca'] = 'yolox',
         conf_thre: float = 0.01,
         nms_thre: float = 0.65,
         lr: float = 0.001,
         momentum: float = 0.9,
         weight_decay: float = 5e-4,
+        **kwargs
+) -> MSCASystem:
+    __d = locals().copy()
+    __d.update(kwargs)
+    del __d['kwargs']
+    return MSCASystem(**__d)
+
+
+def msca_m(
+        data_source: Optional[BaseDataSource] = None,
+        strategy: Optional[BaseSAPStrategy] = None,
+
+        past_time_constant: List[int] = None,
+        future_time_constant: List[int] = None,
+        num_classes: int = 8,
+        base_depth: int = 2,
+        base_channel: int = 48,
+        base_neck_depth: int = 3,
+        hidden_ratio: float = 1.0,
+        strides: Tuple[int, ...] = (8, 16, 32),
+        in_channels: Tuple[int, ...] = (192, 384, 768),
+        mid_channel: int = 192,
+        depthwise: bool = False,
+        act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
+        max_objs: int = 100,
+        backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
+        neck_type: Literal['ta', 'ta2', 'ta3'] = 'ta',
+        neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'relu',
+        neck_p_init: Union[float, Literal['uniform', 'normal'], None] = 0.0,
+        neck_tpe_merge: Literal['add', 'mul'] = 'add',
+        neck_dropout: float = 0.0,
+        train_mask: bool = False,
+        train_scheduler: Literal['yolox', 'msca'] = 'yolox',
+        conf_thre: float = 0.01,
+        nms_thre: float = 0.65,
+        lr: float = 0.001,
+        momentum: float = 0.9,
+        weight_decay: float = 5e-4,
+        ignore_thr: float = 0.4,
+        ignore_value: float = 1.7,
+        **kwargs
+) -> MSCASystem:
+    __d = locals().copy()
+    __d.update(kwargs)
+    del __d['kwargs']
+    return MSCASystem(**__d)
+
+
+def msca_l(
+        data_source: Optional[BaseDataSource] = None,
+        strategy: Optional[BaseSAPStrategy] = None,
+
+        past_time_constant: List[int] = None,
+        future_time_constant: List[int] = None,
+        num_classes: int = 8,
+        base_depth: int = 3,
+        base_channel: int = 64,
+        base_neck_depth: int = 3,
+        hidden_ratio: float = 1.0,
+        strides: Tuple[int, ...] = (8, 16, 32),
+        in_channels: Tuple[int, ...] = (256, 512, 1024),
+        mid_channel: int = 256,
+        depthwise: bool = False,
+        act: Literal['silu', 'relu', 'lrelu', 'sigmoid'] = 'silu',
+        max_objs: int = 100,
+        backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
+        neck_type: Literal['ta', 'ta2', 'ta3'] = 'ta',
+        neck_act_type: Literal['none', 'softmax', 'relu', 'elu', '1lu'] = 'relu',
+        neck_p_init: Union[float, Literal['uniform', 'normal'], None] = 0.0,
+        neck_tpe_merge: Literal['add', 'mul'] = 'add',
+        neck_dropout: float = 0.0,
+        train_mask: bool = False,
+        train_scheduler: Literal['yolox', 'msca'] = 'yolox',
+        conf_thre: float = 0.01,
+        nms_thre: float = 0.65,
+        lr: float = 0.001,
+        momentum: float = 0.9,
+        weight_decay: float = 5e-4,
+        ignore_thr: float = 0.5,
+        ignore_value: float = 1.6,
         **kwargs
 ) -> MSCASystem:
     __d = locals().copy()

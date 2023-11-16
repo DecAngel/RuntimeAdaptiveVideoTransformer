@@ -3,32 +3,31 @@ import os
 import sys
 from pathlib import Path
 
-from ravt.launchers.test import run_test
-
 root_dir = str(Path(__file__).parents[2].resolve())
 os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Optional
+from typing import Literal, Optional
 
 import torch
 import fire
 import pytorch_lightning as pl
 
 from ravt.systems.data_sources import ArgoverseDataSource
-from ravt.systems.yolox import yolox_s
+from ravt.systems.yolox import streamyolo_m
 from ravt.launchers.train import run_train
+from ravt.launchers.test import run_test
 
 torch.set_float32_matmul_precision('high')
 
 
 def main(
-        exp_tag: str, predict_num: int = 0, enable_cache: bool = True, seed: Optional[int] = None,
+        exp_tag: str, predict_num: int = 1, enable_cache: bool = True, seed: Optional[int] = None,
         train: bool = True,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
-    """ Train or test yolox_s model on Argoverse-HD
+    """ Train and test streamyolo_m model on Argoverse-HD
 
     :param train:
     :param exp_tag: the tag for the experiment
@@ -44,7 +43,7 @@ def main(
     seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
-    system = yolox_s(
+    system = streamyolo_m(
         data_source=ArgoverseDataSource(enable_cache=enable_cache),
         predict_num=predict_num,
         num_classes=8,
@@ -54,9 +53,10 @@ def main(
         conf_thre=0.01,
         nms_thre=0.65,
     )
+
     if train:
         system.load_from_pth(
-            Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
+            Path(root_dir) / 'weights' / 'pretrained' / 'yolox_m.pth'
         )
         res = run_train(
             system, exp_tag=exp_tag, max_epoch=15,
@@ -65,7 +65,7 @@ def main(
         )
     else:
         system.load_from_ckpt(
-            Path(root_dir) / 'weights' / 'trained' / 'yolox_s_01_mAP=0.26261_3342393340_050133.ckpt'
+            Path(root_dir) / 'weights' / 'trained' / 'streamyolo_s_012_mAP=0.28539_3342393340_050121.ckpt'
         )
         res = run_test(
             system, exp_tag=exp_tag,
