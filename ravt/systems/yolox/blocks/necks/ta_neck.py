@@ -20,6 +20,7 @@ class TABlock(nn.Module):
             neck_dropout: float = 0.5,
     ):
         super().__init__()
+        self.tpe_learnable = nn.Parameter(torch.ones(10, dtype=torch.float32), requires_grad=True)
         self.fc_time_constant = nn.Sequential(
             nn.Linear(1, in_channel),
             nn.Tanh(),
@@ -74,6 +75,8 @@ class TABlock(nn.Module):
         B, _, C, H, W = feature.size()
         TP = past_time_constant.size(1)
         TF = future_time_constant.size(1)
+        penalty = torch.cumprod(F.sigmoid(self.tpe_learnable), dim=0)
+        penalty = torch.stack([penalty[p] for p in (-past_time_constant).long()], dim=0)[..., None]     # B TP 1
 
         feature_p = self.conv_p(feature.flatten(0, 1)).unflatten(0, (B, TP + 1))    # B TP C H W
         feature_f = feature_p[:, -1:].expand(-1, TF, -1, -1, -1)                      # B TF C H W
@@ -100,6 +103,7 @@ class TABlock(nn.Module):
 
         attn_query = self.fc_query(attn_in_f)                                       # B TF C
         attn_key = self.fc_key(attn_in_p)                                           # B TP C
+        attn_key = attn_key * penalty
         attn_value = (feature_p[:, -1:]-feature_p[:, :-1]).flatten(2, 4)            # B TP CHW
 
         # B TF CHW

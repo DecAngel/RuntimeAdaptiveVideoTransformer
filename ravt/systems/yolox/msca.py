@@ -161,10 +161,14 @@ class MSCASystem(YOLOXBaseSystem):
             past_features = []
 
         if past_time_constant is None:
-            default_max_past = 1
-            default_interval = 1
-            ptc = [p-default_interval for p in past_indices[-default_max_past:]]
-            pf = past_features[-default_max_past:]
+            if len(past_features) > 0:
+                ptc = [-1]
+                pf = past_features[-1:]
+            else:
+                ptc = []
+                pf = []
+            # ptc = [p-default_interval for p in past_indices[-default_max_past:]]
+
         else:
             interval = past_time_constant[-1]
             ptc = [p-interval for p in past_indices if p-interval in past_time_constant]
@@ -180,6 +184,7 @@ class MSCASystem(YOLOXBaseSystem):
             'prev_indices': ptc + [0],
             'prev_features': pf + [features],
         }
+
         if len(ptc) > 0:
             features = self.neck(
                 concat_pyramids(pf + [features]),

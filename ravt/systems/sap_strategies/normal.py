@@ -27,5 +27,5 @@ class NormalStrategy(BaseSAPStrategy):
             else:
                 current_fid = fid
 
-            res, buffer = process_fn(frame, buffer, [-1], [1])
+            res, buffer = process_fn(frame, buffer, None, None)
             output_fn(res[0])

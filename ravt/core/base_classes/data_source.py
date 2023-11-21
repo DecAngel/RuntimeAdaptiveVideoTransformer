@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import List
+from typing import List, Protocol
 
 from ..constants import (
     ComponentDict,

@@ -26,7 +26,6 @@ def main(seed: Optional[int] = None):
     sap_factor = 1.0
     exp_tag = 'MSCA_S with Dynamic scheduler on 1x sAP'
 
-    """
     system = msca_s(
         data_source=ArgoverseDataSource(),
         strategy=NormalStrategy(exp_tag),
@@ -59,6 +58,7 @@ def main(seed: Optional[int] = None):
         conf_thre=0.01,
         nms_thre=0.65,
     )
+    """
 
     system.load_from_ckpt(
         Path(root_dir) / 'weights' / 'trained' / 'msca_s_012_mAP=0.31546_3342393340_131346.ckpt'
