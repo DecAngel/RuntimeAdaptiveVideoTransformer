@@ -15,7 +15,7 @@ import fire
 import pytorch_lightning as pl
 
 from ravt.systems.data_sources import ArgoverseDataSource
-from ravt.systems.yolox import streamyolo_s
+from ravt.systems.yolox import warp_streamnet_s
 from ravt.launchers.train import run_train
 from ravt.launchers.test import run_test
 
@@ -27,7 +27,7 @@ def main(
         train: bool = True,
         batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
 ):
-    """ Train and test streamyolo_s model on Argoverse-HD
+    """ Train and test warp_streamnet_s model on Argoverse-HD
 
     :param train:
     :param exp_tag: the tag for the experiment
@@ -43,14 +43,14 @@ def main(
     seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
-    system = streamyolo_s(
+    system = warp_streamnet_s(
         data_source=ArgoverseDataSource(enable_cache=enable_cache),
         predict_num=predict_num,
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
         momentum=0.9,
         weight_decay=5e-4,
-        conf_thre=0.3,
+        conf_thre=0.01,
         nms_thre=0.65,
     )
 

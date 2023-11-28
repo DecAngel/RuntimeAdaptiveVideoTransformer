@@ -11,7 +11,7 @@ from pycocotools.coco import COCO
 import numpy as np
 
 from ravt.core.constants import (
-    BBoxComponentDict, ImageComponentDict, ComponentDict,
+    BBoxComponentNDict, ImageComponentNDict, ComponentDict,
     SubsetTypes, ComponentTypes
 )
 from ravt.core.utils.array_operations import clip_or_pad_along
@@ -158,7 +158,7 @@ class ArgoverseDataSource(BaseDataSource):
             image = image.transpose(2, 0, 1)
             return image
 
-        def get_image(self, seq_id: int, frame_id: int) -> ImageComponentDict:
+        def get_image(self, seq_id: int, frame_id: int) -> ImageComponentNDict:
             image_id = self.sequence_frame.iloc[seq_id, 2] + frame_id
             if self.sm_client is not None:
                 index_id = image_id - self.first_img_id
@@ -176,7 +176,7 @@ class ArgoverseDataSource(BaseDataSource):
                 'original_size': self.original_size,
             }
 
-        def get_bbox(self, seq_id: int, frame_id: int) -> BBoxComponentDict:
+        def get_bbox(self, seq_id: int, frame_id: int) -> BBoxComponentNDict:
             image_id = self.sequence_frame.iloc[seq_id, 2] + frame_id
             _, _, coordinate, label = self.image_frame.loc[image_id, :]
             coordinate = coordinate / self.resize_ratio

@@ -6,3 +6,6 @@ ComponentTypes = Literal[
 SubsetTypes = Literal[
     'train', 'eval', 'test'
 ]
+VisualizationTypes = Literal[
+    'bbox', 'flow', 'feature'
+]

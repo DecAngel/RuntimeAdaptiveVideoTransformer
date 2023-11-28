@@ -52,7 +52,8 @@ def run_test(
     ]
     if callback_visualize:
         callbacks.append(VisualizeCallback(
-            (300, 480), mode='save', visualize_eval_interval=100, visualize_test_interval=100,
+            exp_tag, (600, 960), display_mode='save_video', batch_mode='all',
+            visualize_eval_interval=1, visualize_test_interval=1,
         ))
 
     # Load

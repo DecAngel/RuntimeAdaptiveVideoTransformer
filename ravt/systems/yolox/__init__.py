@@ -4,3 +4,4 @@ from .streamyolo_plus import StreamYOLOPlusSystem, streamyolo_plus_s, streamyolo
 from .longshortnet import LongShortNetSystem, longshortnet_s, longshortnet_m, longshortnet_l
 from .damo_streamnet import DAMOStreamNetSystem, damo_streamnet_s, damo_streamnet_m, damo_streamnet_l
 from .msca import MSCASystem, msca_s, msca_m, msca_l
+from .warp_streamnet import WarpStreamNetSystem, warp_streamnet_s, warp_streamnet_m, warp_streamnet_l

@@ -1,10 +1,11 @@
 import contextlib
 from pathlib import Path
-from typing import Union, Tuple, List, Optional, Dict
+from typing import Union, Tuple, List, Optional, Dict, Sequence
 
 import numpy as np
 import pytorch_lightning as pl
 import torch
+from pytorch_lightning import Callback
 from torch.optim import Optimizer
 
 from .data_source import BaseDataSource
@@ -20,7 +21,10 @@ except ImportError:
     # low pytorch version where LRScheduler is protected
     from torch.optim.lr_scheduler import _LRScheduler as LRScheduler
 
-from ..constants import BatchDict, PredDict, LossDict, ImageInferenceType, BBoxesInferenceType
+from ..constants import (
+    BatchDict, PredDict, LossDict, ImageInferenceType, BBoxesInferenceType,
+    OutputDict,
+)
 from ..utils.lightning_logger import ravt_logger as logger
 
 
@@ -41,52 +45,40 @@ class BaseSystem(pl.LightningModule):
         self.strategy = strategy
 
     def load_from_pth(self, file_path: Union[str, Path]) -> None:
-        file_path = Path(file_path)
-        if file_path.exists():
-            state_dict = torch.load(str(file_path), map_location='cpu')
-            with contextlib.suppress(NotImplementedError):
-                state_dict = self.pth_adapter(state_dict)
+        state_dict = torch.load(str(file_path), map_location='cpu')
+        with contextlib.suppress(NotImplementedError):
+            state_dict = self.pth_adapter(state_dict)
 
-            misshaped_keys = []
-            ssd = self.state_dict()
-            for k in list(state_dict.keys()):
-                if k in ssd and ssd[k].shape != state_dict[k].shape:
-                    misshaped_keys.append(k)
-                    del state_dict[k]
+        misshaped_keys = []
+        ssd = self.state_dict()
+        for k in list(state_dict.keys()):
+            if k in ssd and ssd[k].shape != state_dict[k].shape:
+                misshaped_keys.append(k)
+                del state_dict[k]
 
-            missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
-            missing_keys = list(filter(lambda key: key not in misshaped_keys, missing_keys))
+        missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
+        missing_keys = list(filter(lambda key: key not in misshaped_keys, missing_keys))
 
-            if len(missing_keys) > 0:
-                logger.warning(f'Missing keys in ckpt: {missing_keys}')
-            if len(unexpected_keys) > 0:
-                logger.warning(f'Unexpected keys in ckpt: {unexpected_keys}')
-            if len(misshaped_keys) > 0:
-                logger.warning(f'Misshaped keys in ckpt: {misshaped_keys}')
-            logger.info(f'pth file {file_path} loaded!')
-        else:
-            raise FileNotFoundError(
-                f'pth file {file_path} not found!'
-            )
+        if len(missing_keys) > 0:
+            logger.warning(f'Missing keys in ckpt: {missing_keys}')
+        if len(unexpected_keys) > 0:
+            logger.warning(f'Unexpected keys in ckpt: {unexpected_keys}')
+        if len(misshaped_keys) > 0:
+            logger.warning(f'Misshaped keys in ckpt: {misshaped_keys}')
+        logger.info(f'pth file {file_path} loaded!')
 
     def pth_adapter(self, state_dict: Dict) -> Dict:
         raise NotImplementedError()
 
-    def load_from_ckpt(self, file_path: Union[str, Path]):
-        file_path = Path(file_path)
-        if file_path.exists():
-            self.load_state_dict(
-                torch.load(
-                    str(file_path),
-                    map_location=self.device
-                )['state_dict'],
-                strict=True,
-            )
-            logger.info(f'ckpt file {file_path} loaded!')
-        else:
-            raise FileNotFoundError(
-                f'ckpt file {file_path} not found!'
-            )
+    def load_from_ckpt(self, file_path: Union[str, Path], strict: bool = True):
+        self.load_state_dict(
+            torch.load(
+                str(file_path),
+                map_location=self.device
+            )['state_dict'],
+            strict=strict,
+        )
+        logger.info(f'ckpt file {file_path} loaded!')
 
     def configure_optimizers(self) -> Tuple[List[Optimizer], List[LRScheduler]]:
         raise NotImplementedError()
@@ -113,32 +105,32 @@ class BaseSystem(pl.LightningModule):
     def forward_impl(
             self,
             batch: BatchDict,
-    ) -> Union[PredDict, LossDict]:
+    ) -> OutputDict:
         raise NotImplementedError()
 
     def forward(
             self,
             batch: BatchDict,
-    ) -> Union[PredDict, LossDict]:
+    ) -> OutputDict:
         with torch.inference_mode():
             batch = self.preprocess.transform(batch) if self.preprocess is not None else batch
         with (contextlib.nullcontext() if self.training else torch.inference_mode()):
             return self.forward_impl(batch)
 
-    def training_step(self, batch: BatchDict, *args, **kwargs) -> LossDict:
-        loss: LossDict = self.forward(batch)
-        self.log_dict(dict(**loss), on_step=True, prog_bar=True)
-        return loss
+    def training_step(self, batch: BatchDict, *args, **kwargs) -> OutputDict:
+        output: OutputDict = self.forward(batch)
+        self.log('loss', output['loss'], on_step=True, prog_bar=True)
+        return output
 
     def on_validation_epoch_start(self) -> None:
         if self.metric is not None:
             self.metric.reset()
 
-    def validation_step(self, batch: BatchDict, *args, **kwargs) -> PredDict:
-        pred: PredDict = self.forward(batch)
+    def validation_step(self, batch: BatchDict, *args, **kwargs) -> OutputDict:
+        output: OutputDict = self.forward(batch)
         if not self.trainer.sanity_checking and self.metric is not None:
-            self.metric.update(batch, pred)
-        return pred
+            self.metric.update(batch, output)
+        return output
 
     def on_validation_epoch_end(self) -> None:
         if not self.trainer.sanity_checking and self.metric is not None:
@@ -150,8 +142,11 @@ class BaseSystem(pl.LightningModule):
     def on_test_epoch_start(self) -> None:
         return self.on_validation_epoch_start()
 
-    def test_step(self, batch: BatchDict, *args, **kwargs) -> PredDict:
+    def test_step(self, batch: BatchDict, *args, **kwargs) -> OutputDict:
         return self.validation_step(batch)
 
     def on_test_epoch_end(self) -> None:
         return self.on_validation_epoch_end()
+
+    def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
+
