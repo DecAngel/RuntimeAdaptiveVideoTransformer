@@ -12,9 +12,9 @@ from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import DAMOBackbone
 from .blocks.necks import LongShortNeck
 from .blocks.heads import TALHead
-from ..data_samplers import YOLOXDataSampler
-from ..metrics import COCOEvalMAPMetric
-from ..transforms import KorniaAugmentation
+from ravt.data_samplers import YOLOXDataSampler
+from ravt.metrics import COCOEvalMAPMetric
+from ravt.transforms import KorniaAugmentation
 
 
 class DAMOStreamNetSystem(YOLOXBaseSystem):
@@ -111,13 +111,13 @@ class DAMOStreamNetSystem(YOLOXBaseSystem):
 
     def inference_impl(
             self,
-            image: ImageInferenceType,
+            batch: ImageInferenceType,
             buffer: Optional[YOLOXBuffer],
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
         # Ignore ptc and ftc
-        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
 
         # Buffer and neck

@@ -1,4 +1,5 @@
-from . import core, systems, launchers
+from . import core, systems
+from .core import launchers
 
 # package variables
 version_tuple = (0, 5, 5)

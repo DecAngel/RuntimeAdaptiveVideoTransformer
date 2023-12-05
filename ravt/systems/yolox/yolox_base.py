@@ -1,24 +1,25 @@
 import contextlib
 import io
-from typing import Optional, Dict, Tuple, Union, List, TypedDict
+from typing import Optional, Dict, Tuple, Union, List, TypedDict, Sequence
 
-import numpy as np
 import torch
 import kornia.augmentation as ka
-from jaxtyping import Float, Int, UInt
+from jaxtyping import Float, Int
 from pycocotools.coco import COCO
+from pytorch_lightning import Callback
 from torch import nn
 
-from .blocks import types, StreamYOLOScheduler
-from ..data_samplers import YOLOXDataSampler
-from ..transforms import KorniaAugmentation
-from ..metrics import COCOEvalMAPMetric
-
+from ravt.data_sources import ArgoverseDataSource
+from ravt.data_samplers import YOLOXDataSampler
+from ravt.transforms import KorniaAugmentation
+from ravt.metrics import COCOEvalMAPMetric
 from ravt.core.constants import (
-    BatchDict, PredDict, LossDict, ImageInferenceType, BBoxesInferenceType
+    BatchTDict, LossDict, SubsetLiteral
 )
 from ravt.core.base_classes import BaseSystem, BaseDataSampler, BaseMetric, BaseTransform, BaseDataSource, BaseSAPStrategy
-from ravt.core.utils.array_operations import clip_or_pad_along
+
+from .blocks import types, StreamYOLOScheduler
+from ...callbacks import EMACallback
 
 
 def concat_pyramids(pyramids: List[types.PYRAMID], dim: int = 1) -> types.PYRAMID:
@@ -42,13 +43,20 @@ class YOLOXBaseSystem(BaseSystem):
             backbone: types.BaseBackbone,
             neck: types.BaseNeck,
             head: types.BaseHead,
+            batch_size: int = 1,
+            num_workers: int = 0,
             with_bbox_0_train: bool = False,
-            data_source: Optional[BaseDataSource] = None,
+            data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]] = None,
             data_sampler: Optional[BaseDataSampler] = None,
             transform: Optional[BaseTransform] = None,
             metric: Optional[BaseMetric] = None,
             strategy: Optional[BaseSAPStrategy] = None,
     ):
+        data_sources = data_sources or {
+            'train': ArgoverseDataSource('train'),
+            'eval': ArgoverseDataSource('eval'),
+            'test': ArgoverseDataSource('test'),
+        }
         data_sampler = data_sampler or YOLOXDataSampler(
             interval=1,
             eval_image_clip=[0],
@@ -90,9 +98,11 @@ class YOLOXBaseSystem(BaseSystem):
         metric = metric or COCOEvalMAPMetric()
 
         super().__init__(
-            data_source=data_source,
+            data_sources=data_sources,
             data_sampler=data_sampler,
-            preprocess=transform,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            transform=transform,
             metric=metric,
             strategy=strategy,
         )
@@ -114,27 +124,23 @@ class YOLOXBaseSystem(BaseSystem):
         self.apply(init_yolo)
 
     @property
-    def example_input_array(self) -> Tuple[BatchDict]:
+    def example_input_array(self) -> Tuple[BatchTDict]:
         b = self.eia_b
         p = self.eia_p
         f = self.eia_f
         return {
+            'image_id': torch.arange(0, b, dtype=torch.int32),
+            'seq_id': torch.ones(b, dtype=torch.int32),
+            'frame_id': torch.arange(0, b, dtype=torch.int32),
             'image': {
-                'image_id': torch.arange(0, b*(p+1), dtype=torch.int32).reshape(b, p+1),
-                'seq_id': torch.ones(b, p+1, dtype=torch.int32),
-                'frame_id': torch.arange(0, b*(p+1), dtype=torch.int32).reshape(b, p+1),
                 'clip_id': torch.arange(-p, 1, dtype=torch.int32).unsqueeze(0).expand(b, -1),
                 'image': torch.randint(0, 255, (b, p+1, 3, 600, 960), dtype=torch.uint8),
                 'original_size': torch.ones(b, p+1, 2, dtype=torch.int32) * torch.tensor([1200, 1920], dtype=torch.int32),
             },
             'bbox': {
-                'image_id': torch.arange(0, b*f, dtype=torch.int32).reshape(b, f),
-                'seq_id': torch.ones(b, f, dtype=torch.int32),
-                'frame_id': torch.arange(0, b*f, dtype=torch.int32).reshape(b, f),
                 'clip_id': torch.arange(1, f+1, dtype=torch.int32).unsqueeze(0).expand(b, -1),
                 'coordinate': torch.zeros(b, f, 100, 4, dtype=torch.float32),
                 'label': torch.zeros(b, f, 100, dtype=torch.int32),
-                # 'probability': torch.zeros(b, f, 100, dtype=torch.float32),
             }
         },
 
@@ -159,18 +165,18 @@ class YOLOXBaseSystem(BaseSystem):
         super().on_validation_epoch_start()
         if isinstance(self.metric, COCOEvalMAPMetric):
             with contextlib.redirect_stdout(io.StringIO()):
-                self.metric.coco = COCO(self.data_source.get_ann_file('eval'))
+                self.metric.coco = COCO(self.data_source.ann_file('eval'))
 
     def on_test_epoch_start(self) -> None:
         super().on_test_epoch_start()
         if isinstance(self.metric, COCOEvalMAPMetric):
             with contextlib.redirect_stdout(io.StringIO()):
-                self.metric.coco = COCO(self.data_source.get_ann_file('test'))
+                self.metric.coco = COCO(self.data_source.ann_file('test'))
 
     def forward_impl(
             self,
-            batch: BatchDict,
-    ) -> Union[PredDict, LossDict]:
+            batch: BatchTDict,
+    ) -> Union[BatchTDict, LossDict]:
         images: Float[torch.Tensor, 'B TP0 C H W'] = batch['image']['image'].float()
         coordinates: Optional[Float[torch.Tensor, 'B TF0 O C']] = batch['bbox']['coordinate'] if 'bbox' in batch else None
         labels: Optional[Int[torch.Tensor, 'B TF0 O']] = batch['bbox']['label'] if 'bbox' in batch else None
@@ -190,10 +196,10 @@ class YOLOXBaseSystem(BaseSystem):
         else:
             pred_dict = self.head(features_f, shape=images.shape[-2:])
             return {
+                'image_id': batch['image_id'],
+                'seq_id': batch['seq_id'],
+                'frame_id': batch['frame_id'],
                 'bbox': {
-                    'image_id': batch['bbox']['image_id'],
-                    'seq_id': batch['bbox']['seq_id'],
-                    'frame_id': batch['bbox']['frame_id'],
                     'clip_id': batch['bbox']['clip_id'],
                     'coordinate': pred_dict['pred_coordinates'],
                     'label': pred_dict['pred_labels'],
@@ -222,3 +228,8 @@ class YOLOXBaseSystem(BaseSystem):
         )
 
         return [optimizer], [{'scheduler': scheduler, 'interval': 'step', 'name': 'SGD_lr'}]
+
+    def configure_callbacks(self) -> Union[Sequence[Callback], Callback]:
+        return [
+            EMACallback(),
+        ]

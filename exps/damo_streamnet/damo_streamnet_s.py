@@ -3,7 +3,7 @@ import os
 import sys
 from pathlib import Path
 
-from ravt.launchers.test import run_test
+from ravt.core.launchers.test import run_test
 
 root_dir = str(Path(__file__).parents[2].resolve())
 os.chdir(root_dir)
@@ -16,9 +16,9 @@ import torch
 import fire
 import pytorch_lightning as pl
 
-from ravt.systems.data_sources import ArgoverseDataSource
+from ravt.data_sources import ArgoverseDataSource
 from ravt.systems.yolox import damo_streamnet_s
-from ravt.launchers.train import run_train
+from ravt.core.launchers.train import run_train
 
 torch.set_float32_matmul_precision('high')
 

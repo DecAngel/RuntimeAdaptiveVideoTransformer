@@ -3,21 +3,18 @@ from typing import Optional, Tuple, Literal, List, Dict
 import kornia.augmentation as ka
 import numpy as np
 import torch
-import torch.nn as nn
 
 from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
-from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchDict, PredDict
+from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchTDict
 from ravt.core.utils.array_operations import clip_or_pad_along
-from ravt.core.utils.lightning_logger import ravt_logger as logger
 
-from .blocks import StreamYOLOScheduler
 from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone
-from .blocks.necks import DeformNeck, DFP
+from .blocks.necks import DeformNeck
 from .blocks.heads import TALHead
-from ..data_samplers import YOLOXDataSampler
-from ..metrics import COCOEvalMAPMetric
-from ..transforms import KorniaAugmentation
+from ravt.data_samplers import YOLOXDataSampler
+from ravt.metrics import COCOEvalMAPMetric
+from ravt.transforms import KorniaAugmentation
 
 
 class WarpStreamNetSystem(YOLOXBaseSystem):
@@ -97,13 +94,13 @@ class WarpStreamNetSystem(YOLOXBaseSystem):
 
     def inference_impl(
             self,
-            image: ImageInferenceType,
+            batch: ImageInferenceType,
             buffer: Optional[YOLOXBuffer],
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
         # Ignore ptc and ftc
-        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
 
         # Buffer and neck
@@ -122,7 +119,7 @@ class WarpStreamNetSystem(YOLOXBaseSystem):
             pred_dict['pred_labels'].cpu().numpy()[0, :, :, None].astype(float),
         ], axis=2), axis=1, fixed_length=100, pad_value=0.0), new_buffer
 
-    def on_train_batch_end(self, outputs: PredDict, batch: BatchDict, batch_idx: int) -> None:
+    def on_train_batch_end(self, outputs: BatchTDict, batch: BatchTDict, batch_idx: int) -> None:
         pass
 
 

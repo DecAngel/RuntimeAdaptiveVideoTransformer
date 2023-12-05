@@ -1,8 +1,6 @@
-from typing import TypedDict, Union, List
-
 import numpy as np
 import torch
-from jaxtyping import Float32, Int32, UInt8
+from jaxtyping import Int32, UInt8
 
 from .id_component import IDComponentNDict, IDComponentTDict
 

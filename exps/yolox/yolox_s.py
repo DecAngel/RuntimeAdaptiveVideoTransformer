@@ -3,8 +3,6 @@ import os
 import sys
 from pathlib import Path
 
-from ravt.launchers.test import run_test
-
 root_dir = str(Path(__file__).parents[2].resolve())
 os.chdir(root_dir)
 sys.path.append(root_dir)
@@ -16,9 +14,10 @@ import torch
 import fire
 import pytorch_lightning as pl
 
-from ravt.systems.data_sources import ArgoverseDataSource
+from ravt.data_sources import ArgoverseDataSource
 from ravt.systems.yolox import yolox_s
-from ravt.launchers.train import run_train
+from ravt.core.launchers.train import run_train
+from ravt.core.launchers.test import run_test
 
 torch.set_float32_matmul_precision('high')
 
@@ -45,7 +44,13 @@ def main(
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
     system = yolox_s(
-        data_source=ArgoverseDataSource(enable_cache=enable_cache),
+        data_sources={
+            'train': ArgoverseDataSource('train', enable_cache=enable_cache),
+            'eval': ArgoverseDataSource('eval', enable_cache=enable_cache),
+            'test': ArgoverseDataSource('test', enable_cache=enable_cache),
+        },
+        batch_size=batch_size,
+        num_workers=num_workers,
         predict_num=predict_num,
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
@@ -59,18 +64,14 @@ def main(
             Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
         )
         res = run_train(
-            system, exp_tag=exp_tag, max_epoch=15,
-            batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-            callback_ema=True, callback_visualize=visualize, resume=None, seed=seed,
+            system, exp_tag=exp_tag, max_epoch=15, device_ids=[device_id], debug=debug, resume=None,
         )
     else:
         system.load_from_ckpt(
             Path(root_dir) / 'weights' / 'trained' / 'yolox_s_01_mAP=0.26261_3342393340_050133.ckpt'
         )
         res = run_test(
-            system, exp_tag=exp_tag,
-            batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-            callback_visualize=visualize, resume=None, seed=seed,
+            system, exp_tag=exp_tag, device_ids=[device_id], debug=debug, resume=None,
         )
     print(json.dumps(res, indent=2))
 

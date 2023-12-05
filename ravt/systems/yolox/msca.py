@@ -7,7 +7,7 @@ import torch
 from torch import nn
 
 from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
-from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchDict, PredDict, LossDict
+from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BatchTDict, LossDict
 from ravt.core.utils.array_operations import clip_or_pad_along
 from ravt.core.utils.lightning_logger import ravt_logger as logger
 
@@ -16,9 +16,9 @@ from .blocks.backbones import YOLOXPAFPNBackbone, DAMOBackbone
 from .blocks.necks import TANeck, TA2Neck, TA3Neck
 from .blocks.heads import TALHead
 from .blocks.schedulers import StreamYOLOScheduler, MSCAScheduler
-from ..data_samplers import YOLOXDataSampler
-from ..metrics import COCOEvalMAPMetric
-from ..transforms import KorniaAugmentation
+from ravt.data_samplers import YOLOXDataSampler
+from ravt.metrics import COCOEvalMAPMetric
+from ravt.transforms import KorniaAugmentation
 
 
 class MSCASystem(YOLOXBaseSystem):
@@ -145,12 +145,12 @@ class MSCASystem(YOLOXBaseSystem):
 
     def inference_impl(
             self,
-            image: ImageInferenceType,
+            batch: ImageInferenceType,
             buffer: Optional[YOLOXBuffer],
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
-        images = torch.from_numpy(image.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
 
         if buffer is not None:
@@ -203,8 +203,8 @@ class MSCASystem(YOLOXBaseSystem):
     
     def forward_impl(
             self,
-            batch: BatchDict,
-    ) -> Union[PredDict, LossDict]:
+            batch: BatchTDict,
+    ) -> Union[BatchTDict, LossDict]:
         if self.hparams.train_mask and self.training:
             # random mask past and future
             MAX_P = 3

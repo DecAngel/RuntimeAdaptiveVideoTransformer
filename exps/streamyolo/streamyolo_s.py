@@ -8,16 +8,16 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Literal, Optional
+from typing import Optional
 
 import torch
 import fire
 import pytorch_lightning as pl
 
-from ravt.systems.data_sources import ArgoverseDataSource
+from ravt.data_sources import ArgoverseDataSource
 from ravt.systems.yolox import streamyolo_s
-from ravt.launchers.train import run_train
-from ravt.launchers.test import run_test
+from ravt.core.launchers.train import run_train
+from ravt.core.launchers.test import run_test
 
 torch.set_float32_matmul_precision('high')
 
