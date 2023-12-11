@@ -44,6 +44,9 @@ class ArgoverseDataSource(BaseDataSource):
         self.default_coordinates = np.zeros((self.max_objs, 4), dtype=np.float32)
         self.default_labels = np.zeros((self.max_objs,), dtype=np.int32)
 
+    def init(self):
+        return self.image_frame
+
     @functools.cached_property
     def caches_image_bool_client(self):
         if self.enable_cache:
@@ -159,6 +162,7 @@ class ArgoverseDataSource(BaseDataSource):
         return image
 
     def get_component(self, seq_id: int, frame_id: int, component: ComponentLiteral) -> ComponentNDict:
+        self.init()
         image_id = self.sequence_frame.iloc[seq_id, 2] + frame_id
         if component == 'meta':
             return {
@@ -184,7 +188,7 @@ class ArgoverseDataSource(BaseDataSource):
             }
         elif component == 'bbox':
             _, original_size, coordinate, label = self.image_frame.loc[image_id, :]
-            resize_ratio = (self.size / original_size)[[1, 0, 1, 0]]
+            resize_ratio = (self.size / original_size).astype(np.float32)[[1, 0, 1, 0]]
             coordinate = coordinate * resize_ratio
             return {
                 'coordinate': clip_or_pad_along(coordinate, 0, self.max_objs),
@@ -194,4 +198,5 @@ class ArgoverseDataSource(BaseDataSource):
             raise ValueError(f'Unsupported component {component}!')
 
     def get_length(self) -> List[int]:
+        self.init()
         return self.sequence_frame['seq_len'].tolist()

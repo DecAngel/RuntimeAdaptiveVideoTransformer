@@ -22,6 +22,6 @@ class BaseDataSource(Dataset):
         for c, clip_ids in components.items():
             res = []
             for i in clip_ids:
-                res.append(self.get_component(seq_id, frame_id+i, c))
+                res.append(self.get_component(seq_id, frame_id+i, c) | {'clip_id': i})
             batch[c] = default_collate(res)
         return batch

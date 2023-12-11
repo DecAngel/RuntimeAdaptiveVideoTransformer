@@ -17,7 +17,7 @@ def slice_along(
     :param start: the start of slice
     :param end: the end of slice
     :param step: the step of slice
-    :return: the sliced array
+    :return: the result array
     """
     return arr[(slice(None), ) * (axis % arr.ndim) + (slice(start, end, step),)]
 
@@ -29,9 +29,9 @@ def clip_or_pad_along(
 
     :param arr: the array to be clipped or padded, `np.ndarray` or `torch.Tensor`
     :param axis: the index of the dimension
-    :param fixed_length:
+    :param fixed_length: the desired length of the dimension
     :param pad_value: the value to pad
-    :return:
+    :return: the result array
     """
     if arr.shape[axis] > fixed_length:
         return slice_along(arr, axis, 0, fixed_length)
@@ -54,10 +54,10 @@ def remove_pad_along(
 ) -> ArrayType:
     """Remove the pad along a specific dimension.
 
-    :param arr:
-    :param axis:
-    :param pad_value:
-    :return:
+    :param arr: the array to be clipped, `np.ndarray` or `torch.Tensor`
+    :param axis: the index of the dimension
+    :param pad_value: the pad value to remove
+    :return: the result array
     """
     data_length = 0
     if isinstance(arr, np.ndarray):

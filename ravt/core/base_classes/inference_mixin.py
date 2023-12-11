@@ -10,14 +10,14 @@ from .metric import BaseMetric
 from .sap_strategy import BaseSAPStrategy
 
 
-class InferenceMixin(Protocol):
-    training: bool
-    transform: BaseTransform
-    metric: BaseMetric
-    strategy: BaseSAPStrategy
-    trainer: pl.Trainer
-    def log(self, *args, **kwargs): ...
-    def log_dict(self, *args, **kwargs): ...
+class InferenceMixin:
+    # training: bool
+    # transform: BaseTransform
+    # metric: BaseMetric
+    # strategy: BaseSAPStrategy
+    # trainer: pl.Trainer
+    # def log(self, *args, **kwargs): ...
+    # def log_dict(self, *args, **kwargs): ...
 
     def inference_impl(
             self,

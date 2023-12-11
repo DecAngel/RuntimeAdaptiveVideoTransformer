@@ -10,6 +10,8 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.trainer.states import TrainerStatus
 
+from .visualize import VisualizeCallback
+from ..utils.image_writer import ImageWriter
 from ..utils.lightning_logger import ravt_logger as logger
 from ..utils.progress_bar import NewTqdmProgressBar
 from ..base_classes import BaseSystem
@@ -41,6 +43,7 @@ def run_train(
         device_ids: Optional[List[int]] = None,
         debug: bool = __debug__,
         resume: Union[Path, str, Literal['last', 'best'], None] = None,
+        visualize_mode: Optional[Literal['show_opencv', 'write_image', 'write_video']] = None,
 ):
     # Init
     device_ids = device_ids or [0]
@@ -54,6 +57,10 @@ def run_train(
     s = set(locals().keys()) - s - set('s')
     for name in s:
         locals()[name].mkdir(exist_ok=True, parents=True)
+
+    # Visualization Writer
+    if visualize_mode is not None:
+        system.image_writer = ImageWriter(tag=exp_tag, mode=visualize_mode, visualization_dir=visualize_dir)
 
     # Callbacks
     callbacks = [
@@ -73,7 +80,7 @@ def run_train(
     variables = locals()
     exp_settings = {
         name: variables[name]
-        for name in ['exp_tag', 'batch_size', 'num_workers', 'max_epoch', 'device_ids', 'debug', 'seed', 'resume']
+        for name in ['exp_tag', 'max_epoch', 'device_ids', 'debug', 'resume', 'visualize']
     }
     all_settings = json.dumps({'system_hparams': system.hparams, 'exp_settings': exp_settings}, indent=2)
     logger.info(all_settings)
@@ -97,7 +104,6 @@ def run_train(
         detect_anomaly=True if debug else False,
         profiler='simple' if debug else None,
     )
-
     trainer.fit(system)
 
     if trainer.state.status == TrainerStatus.INTERRUPTED:

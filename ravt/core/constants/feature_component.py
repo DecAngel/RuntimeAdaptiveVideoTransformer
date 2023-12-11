@@ -16,7 +16,7 @@ class FeatureComponentNDict(IDComponentNDict, total=False):
 
     **image**: a feature array with CHW shape in pixels
 
-    **original_size**: Original HW size of flow
+    **original_size**: Original HW size of feature
     """
     feature: FeatureTypeN
     original_size: FeatureSizeTypeN
@@ -27,7 +27,7 @@ class FeatureComponentTDict(IDComponentTDict, total=False):
 
     **image**: a feature array with CHW shape in pixels
 
-    **original_size**: Original HW size of flow
+    **original_size**: Original HW size of feature
     """
     feature: FeatureTypeT
     original_size: FeatureSizeTypeT

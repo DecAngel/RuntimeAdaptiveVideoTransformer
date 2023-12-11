@@ -17,6 +17,8 @@ from ravt.core.constants import (
     BatchTDict, LossDict, SubsetLiteral
 )
 from ravt.core.base_classes import BaseSystem, BaseDataSampler, BaseMetric, BaseTransform, BaseDataSource, BaseSAPStrategy
+from ravt.core.utils.visualization import draw_feature, draw_bbox, add_clip_id
+from ravt.core.utils.image_writer import ImageWriter
 
 from .blocks import types, StreamYOLOScheduler
 from ...callbacks import EMACallback
@@ -165,13 +167,13 @@ class YOLOXBaseSystem(BaseSystem):
         super().on_validation_epoch_start()
         if isinstance(self.metric, COCOEvalMAPMetric):
             with contextlib.redirect_stdout(io.StringIO()):
-                self.metric.coco = COCO(self.data_source.ann_file('eval'))
+                self.metric.coco = COCO(str(self.data_sources['eval'].ann_file))
 
     def on_test_epoch_start(self) -> None:
         super().on_test_epoch_start()
         if isinstance(self.metric, COCOEvalMAPMetric):
             with contextlib.redirect_stdout(io.StringIO()):
-                self.metric.coco = COCO(self.data_source.ann_file('test'))
+                self.metric.coco = COCO(str(self.data_sources['test'].ann_file))
 
     def forward_impl(
             self,
@@ -185,6 +187,10 @@ class YOLOXBaseSystem(BaseSystem):
 
         features_p = self.backbone(images)
         features_f = self.neck(features_p, past_frame_constant, future_frame_constant)
+
+        if self.image_writer is not None:
+
+
         if self.training:
             loss_dict = self.head(
                 features_f,
@@ -204,7 +210,7 @@ class YOLOXBaseSystem(BaseSystem):
                     'coordinate': pred_dict['pred_coordinates'],
                     'label': pred_dict['pred_labels'],
                     'probability': pred_dict['pred_probabilities'],
-                }
+                },
             }
 
     def configure_optimizers(self):

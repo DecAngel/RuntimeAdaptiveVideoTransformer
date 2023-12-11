@@ -9,7 +9,7 @@ from torch.utils.tensorboard import SummaryWriter
 from torchvision.utils import flow_to_image
 
 from ravt.core.base_classes import BaseDataSource, BaseSystem
-from ravt.core.constants import BatchTDict, BatchTDict, SubsetLiteral, VisualizationDict
+from ravt.core.constants import BatchTDict, SubsetLiteral
 from ravt.core.configs import output_visualize_dir
 
 
@@ -36,7 +36,7 @@ class VisualizeCallback(pl.Callback):
 
         self._trainer: Optional[pl.Trainer] = None
         self._logger: Optional[SummaryWriter] = None
-        self._data_source: Optional[BaseDataSource] = None
+        self._data_sources: Optional[BaseDataSource] = None
 
         self.video_writer: Optional[cv2.VideoWriter] = None
 
@@ -47,30 +47,32 @@ class VisualizeCallback(pl.Callback):
 
     def setup(self, trainer: "pl.Trainer", pl_module: BaseSystem, stage: str) -> None:
         self._trainer = trainer
-        self._data_source = pl_module.data_source
+        self._data_sources = pl_module.data_sources
         if pl_module.logger is not None:
             self._logger = pl_module.logger.experiment
         self.visualize_count = 0
 
     def _get_visualize_image_and_ids(
-            self, batch: BatchTDict, pred: VisualizationDict, batch_id: int
+            self, batch: BatchTDict, pred: BatchTDict, batch_id: int
     ) -> Tuple[np.ndarray, int, int]:
         if 'image' in batch:
-            base_seq_id = batch['image']['seq_id'][batch_id, -1].cpu().numpy().item()
-            base_frame_id = batch['image']['frame_id'][batch_id, -1].cpu().numpy().item()
+            base_seq_id = batch['seq_id'][batch_id].cpu().numpy().item()
+            base_frame_id = batch['frame_id'][batch_id].cpu().numpy().item()
         else:
             raise ValueError('\'image\' must be present in batch!')
         if 'bbox' in pred:
             pred_bbox_clip_ids = pred['bbox']['clip_id'][batch_id].cpu().numpy().tolist()
         else:
             pred_bbox_clip_ids = []
-        if 'visualization' in pred:
-            pass
+        if 'flow' in pred:
+            pred_flow_clip_ids = pred['bbox']['clip_id'][batch_id].cpu().numpy().tolist()
+        else:
+            pred_flow_clip_ids = []
 
         vis_images = []
-        for i in pred_bbox_clip_ids:
+        for i in sorted(list(set(pred_bbox_clip_ids+pred_flow_clip_ids))):
             # image
-            image_dict = self._data_source.get_component(self.stage, 'image', base_seq_id, base_frame_id + i)
+            image_dict = self._data_sources[self.stage].get_component(base_seq_id, base_frame_id + i, 'image')
             image = image_dict['image'].transpose(1, 2, 0)
             if self.resize is not None:
                 original_size = image.shape[:2]
@@ -81,41 +83,58 @@ class VisualizeCallback(pl.Callback):
                 resize_ratio = np.ones((4,), dtype=np.float32)
             blank_image = np.zeros_like(image)
 
-            # gt_bbox
-            overlay = blank_image.copy()
-            bbox_dict = self._data_source.get_component(self.stage, 'bbox', base_seq_id, base_frame_id + i)
-            for c, l in zip(
-                    bbox_dict['coordinate'],
-                    bbox_dict['label'],
-            ):
-                if np.sum(c) > 1e-1:
-                    overlay = cv2.rectangle(
-                        overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()),
-                        (0, 255, 0), 2
-                    )
-                else:
-                    break
-            mask = ((overlay[..., 1] == 0) * 255).astype(np.uint8)
-            image = np.bitwise_and(image, mask[..., None])
-            image = cv2.add(image, overlay)
+            bbox_image = image.copy()
+            if i in pred_bbox_clip_ids:
+                # gt_bbox
+                overlay = blank_image.copy()
+                bbox_dict = self._data_sources[self.stage].get_component(base_seq_id, base_frame_id + i, 'bbox')
+                for c, l in zip(
+                        bbox_dict['coordinate'],
+                        bbox_dict['label'],
+                ):
+                    if np.sum(c) > 1e-1:
+                        overlay = cv2.rectangle(
+                            overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()),
+                            (0, 255, 0), 2
+                        )
+                    else:
+                        break
+                mask = ((overlay[..., 1] == 0) * 255).astype(np.uint8)
+                bbox_image = np.bitwise_and(bbox_image, mask[..., None])
+                bbox_image = cv2.add(bbox_image, overlay)
 
-            # pred_bbox
-            overlay = blank_image.copy()
-            for c, l, p in zip(
-                    pred['bbox']['coordinate'][batch_id, pred_bbox_clip_ids.index(i)].cpu().numpy(),
-                    pred['bbox']['label'][batch_id, pred_bbox_clip_ids.index(i)].cpu().numpy(),
-                    pred['bbox']['probability'][batch_id, pred_bbox_clip_ids.index(i)].cpu().numpy(),
-            ):
-                if np.sum(c) > 1e-1:
-                    overlay = cv2.rectangle(
-                        overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()),
-                        (0, 0, 255), 2
-                    )
-                else:
-                    break
-            mask = ((overlay[..., 2] == 0) * 255).astype(np.uint8)
-            image = np.bitwise_and(image, mask[..., None])
-            image = cv2.add(image, overlay)
+                # pred_bbox
+                overlay = blank_image.copy()
+                for c, l, p in zip(
+                        pred['bbox']['coordinate'][batch_id, pred_bbox_clip_ids.index(i)].cpu().numpy(),
+                        pred['bbox']['label'][batch_id, pred_bbox_clip_ids.index(i)].cpu().numpy(),
+                        pred['bbox']['probability'][batch_id, pred_bbox_clip_ids.index(i)].cpu().numpy(),
+                ):
+                    if np.sum(c) > 1e-1:
+                        overlay = cv2.rectangle(
+                            overlay, *((c * resize_ratio).astype(int).reshape(2, 2).tolist()),
+                            (0, 0, 255), 2
+                        )
+                    else:
+                        break
+                mask = ((overlay[..., 2] == 0) * 255).astype(np.uint8)
+                bbox_image = np.bitwise_and(bbox_image, mask[..., None])
+                bbox_image = cv2.add(bbox_image, overlay)
+
+            flow_image = blank_image.copy()
+            if i in pred_flow_clip_ids:
+                A = pred['flow']['flow'][batch_id, pred_flow_clip_ids.index(i)].cpu().type(torch.float32)
+                C, H, W = A.size()
+                A = A.permute(1, 2, 0).flatten(0, 1)  # HW, C
+                U, S, V = torch.pca_lowrank(A)
+                flow = torch.matmul(A, V[:, :2])
+                flow = flow.unflatten(0, (H, W)).permute(2, 0, 1)
+
+                flow_image = flow_to_image(flow).numpy().transpose(1, 2, 0)
+                if self.resize is not None:
+                    flow_image = cv2.resize(flow_image, dsize=(self.resize[1], self.resize[0]), interpolation=cv2.INTER_LINEAR)
+
+            image = np.concatenate([bbox_image, flow_image], axis=0)
 
             image = np.pad(image, ((50, 10), (5, 5), (0, 0)), constant_values=(0, 0))
             image = cv2.putText(
@@ -207,7 +226,7 @@ class VisualizeCallback(pl.Callback):
         dataloader_idx: int = 0,
     ) -> None:
         if self.visualize_test != 0 and not self._trainer.sanity_checking:
-            if self.visualize_count % self.visualize_eval == 0:
+            if self.visualize_count % self.visualize_test == 0:
                 self.on_step(batch, outputs)
 
     def on_train_epoch_end(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:

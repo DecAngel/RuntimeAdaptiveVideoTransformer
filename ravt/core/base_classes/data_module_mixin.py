@@ -1,5 +1,5 @@
 import uuid
-from typing import Optional, Dict, Protocol, List, Tuple, Iterator
+from typing import Optional, Dict, List, Tuple, Iterator
 
 import pytorch_lightning as pl
 from torch.utils.data import DataLoader, Sampler
@@ -22,11 +22,11 @@ class DataSampler(Sampler[Tuple[int, int, Dict[ComponentLiteral, List[int]]]]):
         return len(self.clips)
 
 
-class DataModuleMixin(Protocol):
-    data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]]
-    data_sampler: Optional[BaseDataSampler]
-    batch_size: int
-    num_workers: int
+class DataModuleMixin:
+    # data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]]
+    # data_sampler: Optional[BaseDataSampler]
+    # batch_size: int
+    # num_workers: int
 
     def worker_init_fn(self, worker_id: int) -> None:
         import torch.multiprocessing

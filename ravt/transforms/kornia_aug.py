@@ -57,7 +57,7 @@ class KorniaAugmentation(BaseTransform):
 
         self.register_buffer('c255', tensor=torch.tensor(255.0, dtype=torch.float32), persistent=False)
 
-    def transform(self, batch: BatchTDict) -> BatchTDict:
+    def preprocess_tensor(self, batch: BatchTDict) -> BatchTDict:
         if self.training:
             def transform(*args):
                 args = listify(self.train_aug_transform(*args)) if self.train_aug_transform is not None else args

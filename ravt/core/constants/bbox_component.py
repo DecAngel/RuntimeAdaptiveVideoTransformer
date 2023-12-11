@@ -24,10 +24,15 @@ class BBoxComponentNDict(IDComponentNDict, total=False):
     **label**: the category of the bbox
 
     **probability**: the probability of the bbox
+
+    **current_size**: Current HW size of the bbox
+
+    **original_size**: Original HW size of the bbox
     """
     coordinate: BBoxCoordinateTypeN
     label: BBoxLabelTypeN
     probability: BBoxProbabilityTypeN
+    current_size: BBoxSizeTypeN
     original_size: BBoxSizeTypeN
 
 
@@ -39,8 +44,13 @@ class BBoxComponentTDict(IDComponentTDict, total=False):
     **label**: the category of the bbox
 
     **probability**: the probability of the bbox
+
+    **current_size**: Current HW size of the bbox
+
+    **original_size**: Original HW size of the bbox
     """
     coordinate: BBoxCoordinateTypeT
     label: BBoxLabelTypeT
     probability: BBoxProbabilityTypeT
+    current_size: BBoxSizeTypeT
     original_size: BBoxSizeTypeT

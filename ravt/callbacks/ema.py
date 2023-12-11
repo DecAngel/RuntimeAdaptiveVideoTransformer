@@ -91,21 +91,21 @@ class EMACallback(Callback):
         # ~ Copy EMA parameters to LightningModule
         self.copy_to(self.ema.module.parameters(), pl_module.parameters())
 
-    def on_validation_end(self, trainer, pl_module):
+    def on_validation_epoch_end(self, trainer, pl_module):
         "Restore original parameters to resume training later"
         self.restore(pl_module.parameters())
 
-    def on_test_start(self, trainer, pl_module) -> None:
-        self.on_validation_start(trainer, pl_module)
+    def on_test_epoch_start(self, trainer, pl_module) -> None:
+        self.on_validation_epoch_start(trainer, pl_module)
 
-    def on_test_end(self, trainer, pl_module) -> None:
-        self.on_validation_end(trainer, pl_module)
+    def on_test_epoch_end(self, trainer, pl_module) -> None:
+        self.on_validation_epoch_end(trainer, pl_module)
 
-    def on_predict_start(self, trainer, pl_module) -> None:
-        self.on_validation_start(trainer, pl_module)
+    def on_predict_epoch_start(self, trainer, pl_module) -> None:
+        self.on_validation_epoch_start(trainer, pl_module)
 
-    def on_predict_end(self, trainer, pl_module) -> None:
-        self.on_validation_end(trainer, pl_module)
+    def on_predict_epoch_end(self, trainer, pl_module) -> None:
+        self.on_validation_epoch_end(trainer, pl_module)
 
     def on_train_end(self, trainer, pl_module):
         # update the LightningModule with the EMA weights

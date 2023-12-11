@@ -1,16 +1,17 @@
 import contextlib
 from pathlib import Path
-from typing import Dict, Union, Protocol, List, Tuple
+from typing import Dict, Union, List, Tuple
 
 import torch
 
 from ..utils.lightning_logger import ravt_logger as logger
 
 
-class CheckpointMixin(Protocol):
-    device: torch.device
-    def state_dict(self) -> Dict: ...
-    def load_state_dict(self, state_dict: Dict, strict: bool = False) -> Tuple[List[str], List[str]]: ...
+class CheckpointMixin:
+    # device: torch.device
+    # def state_dict(self) -> Dict: ...
+    # def load_state_dict(self, state_dict: Dict, strict: bool = False) -> Tuple[List[str], List[str]]: ...
+
     def pth_adapter(self, state_dict: Dict) -> Dict: ...
 
     def load_from_pth(self, file_path: Union[str, Path]) -> None:

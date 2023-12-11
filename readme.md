@@ -28,3 +28,4 @@ chmod +x ./ravt/ninja
 - [x] fix random resize
 - [x] fix ema saving & loading
 - [x] fix kornia augmentation with different length input
+- [ ] fix sap

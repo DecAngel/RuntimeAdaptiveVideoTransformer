@@ -64,14 +64,14 @@ def main(
             Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
         )
         res = run_train(
-            system, exp_tag=exp_tag, max_epoch=15, device_ids=[device_id], debug=debug, resume=None,
+            system, exp_tag=exp_tag, max_epoch=15, device_ids=[device_id], debug=debug, resume=None, visualize=visualize,
         )
     else:
         system.load_from_ckpt(
             Path(root_dir) / 'weights' / 'trained' / 'yolox_s_01_mAP=0.26261_3342393340_050133.ckpt'
         )
         res = run_test(
-            system, exp_tag=exp_tag, device_ids=[device_id], debug=debug, resume=None,
+            system, exp_tag=exp_tag, device_ids=[device_id], debug=debug, resume=None, visualize=visualize,
         )
     print(json.dumps(res, indent=2))
 

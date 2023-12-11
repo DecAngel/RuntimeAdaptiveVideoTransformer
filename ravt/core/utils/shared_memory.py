@@ -1,4 +1,5 @@
 import functools
+import math
 import pickle
 import ctypes
 import re
@@ -99,7 +100,7 @@ class SharedMemoryClient:
 
     def request_shared_memory(self, name: str, dtype: object, shape_tuple: Tuple[int, ...]) -> np.ndarray:
         ctype = np.ctypeslib.as_ctypes_type(dtype)
-        size = ctypes.sizeof(ctype) * functools.reduce(int.__mul__, shape_tuple)
+        size = ctypes.sizeof(ctype) * math.prod(shape_tuple)
         with connect(f'ws://127.0.0.1:{shared_memory_port}') as client:
             logger.info(f'allocating "{name}" with total size {size/(2**30):.2f} GB')
             client.send(pickle.dumps((name, size)))

@@ -2,12 +2,7 @@ from typing import Optional, Dict
 
 import pytorch_lightning as pl
 
-from .data_source import BaseDataSource
-from .data_sampler import BaseDataSampler
-from .transform import BaseTransform
-from .metric import BaseMetric
-from .sap_strategy import BaseSAPStrategy
-
+from ..utils.image_writer import ImageWriter
 
 try:
     from torch.optim.lr_scheduler import LRScheduler
@@ -15,12 +10,15 @@ except ImportError:
     # low pytorch version where LRScheduler is protected
     from torch.optim.lr_scheduler import _LRScheduler as LRScheduler
 
-from ..constants import (
-    SubsetLiteral
-)
+from ..constants import SubsetLiteral
 from .inference_mixin import InferenceMixin
 from .checkpoint_mixin import CheckpointMixin
 from .data_module_mixin import DataModuleMixin
+from .data_source import BaseDataSource
+from .data_sampler import BaseDataSampler
+from .transform import BaseTransform
+from .metric import BaseMetric
+from .sap_strategy import BaseSAPStrategy
 
 
 class BaseSystem(DataModuleMixin, CheckpointMixin, InferenceMixin, pl.LightningModule):
@@ -42,3 +40,4 @@ class BaseSystem(DataModuleMixin, CheckpointMixin, InferenceMixin, pl.LightningM
         self.transform = transform
         self.metric = metric
         self.strategy = strategy
+        self.image_writer: Optional[ImageWriter] = None

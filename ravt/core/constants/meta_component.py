@@ -4,7 +4,6 @@ import numpy as np
 import torch
 from jaxtyping import Int32
 
-
 MetaTypeN = Int32[np.ndarray, '']
 MetaTypeT = Int32[torch.Tensor, '*batch_size']
 
