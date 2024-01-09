@@ -2,6 +2,7 @@ import contextlib
 import io
 from typing import Optional, Dict, Tuple, Union, List, TypedDict, Sequence
 
+import numpy as np
 import torch
 import kornia.augmentation as ka
 from jaxtyping import Float, Int
@@ -17,11 +18,14 @@ from ravt.core.constants import (
     BatchTDict, LossDict, SubsetLiteral
 )
 from ravt.core.base_classes import BaseSystem, BaseDataSampler, BaseMetric, BaseTransform, BaseDataSource, BaseSAPStrategy
-from ravt.core.utils.visualization import draw_feature, draw_bbox, add_clip_id
-from ravt.core.utils.image_writer import ImageWriter
+from ravt.core.utils.visualization import draw_grid_clip_id, add_clip_id, draw_feature_batch, draw_image
+from ravt.core.utils.collection_operations import tensor2ndarray, reverse_collate, select_collate
 
 from .blocks import types, StreamYOLOScheduler
+from .blocks.types import PYRAMID
 from ...callbacks import EMACallback
+from ...core.utils.grad_check import plot_grad_flow
+from ...core.utils.time_recorder import TimeRecorder
 
 
 def concat_pyramids(pyramids: List[types.PYRAMID], dim: int = 1) -> types.PYRAMID:
@@ -113,10 +117,6 @@ class YOLOXBaseSystem(BaseSystem):
         self.head = head
         self.with_bbox_0_train = with_bbox_0_train
 
-        self.eia_b = 2
-        self.eia_p = len(data_sampler.eval_image_clip) - 1
-        self.eia_f = len(data_sampler.eval_bbox_clip)
-
         def init_yolo(M):
             for m in M.modules():
                 if isinstance(m, torch.nn.BatchNorm2d):
@@ -125,11 +125,29 @@ class YOLOXBaseSystem(BaseSystem):
 
         self.apply(init_yolo)
 
+        # visualization
+        self.visualization_count = 0
+
+        # time record
+        self.time_recorder = TimeRecorder(description=self.__class__.__name__, mode='sum')
+
+        def tr_hook(tag: Optional[str]):
+            def _hook(*args):
+                self.time_recorder.record(tag)
+            return _hook
+
+        self.backbone.register_forward_pre_hook(tr_hook(None))
+        self.backbone.register_forward_hook(tr_hook('backbone'))
+        self.neck.register_forward_pre_hook(tr_hook(None))
+        self.neck.register_forward_hook(tr_hook('neck'))
+        self.head.register_forward_pre_hook(tr_hook(None))
+        self.head.register_forward_hook(tr_hook('head'))
+
     @property
     def example_input_array(self) -> Tuple[BatchTDict]:
-        b = self.eia_b
-        p = self.eia_p
-        f = self.eia_f
+        b = 2
+        p = len(self.data_sampler.eval_image_clip) - 1
+        f = len(self.data_sampler.eval_bbox_clip)
         return {
             'image_id': torch.arange(0, b, dtype=torch.int32),
             'seq_id': torch.ones(b, dtype=torch.int32),
@@ -175,6 +193,34 @@ class YOLOXBaseSystem(BaseSystem):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.metric.coco = COCO(str(self.data_sources['test'].ann_file))
 
+    def visualize(
+            self,
+            batch: BatchTDict,
+            features_p: PYRAMID,
+            features_f: PYRAMID,
+            pred: Optional[BatchTDict],
+    ):
+        seq_id = batch['seq_id'][0].cpu().numpy().item()
+        frame_id = batch['frame_id'][0].cpu().numpy().item()
+
+        f = tensor2ndarray({'feature': torch.cat([features_p[0], features_f[0]], dim=1)})  # B, TP+1+TF, C, H, W
+        f = select_collate(f, 0)  # TP+1+TF, C, H, W
+        clip_ids = (
+                batch['image']['clip_id'][0].cpu().numpy().astype(int).tolist() +
+                batch['bbox']['clip_id'][0, (int(self.with_bbox_0_train) if self.training else 0):].cpu().numpy().astype(int).tolist()
+        )
+        vis_feature = draw_feature_batch(reverse_collate(f), size=(300, 480))
+        vis_image = [
+            draw_image(self.active_data_source.get_component(seq_id, frame_id + c, 'image'), size=(300, 480))
+            for c in clip_ids
+        ]
+
+        vis = draw_grid_clip_id([vis_image, vis_feature], clip_ids)
+        self.image_writer.write(vis)
+
+        self.time_recorder.print()
+        self.time_recorder.t.clear()
+
     def forward_impl(
             self,
             batch: BatchTDict,
@@ -188,20 +234,17 @@ class YOLOXBaseSystem(BaseSystem):
         features_p = self.backbone(images)
         features_f = self.neck(features_p, past_frame_constant, future_frame_constant)
 
-        if self.image_writer is not None:
-
-
         if self.training:
-            loss_dict = self.head(
+            res = self.head(
                 features_f,
                 gt_coordinates=coordinates,
                 gt_labels=labels,
                 shape=images.shape[-2:]
             )
-            return loss_dict
+            vis_pred = None
         else:
             pred_dict = self.head(features_f, shape=images.shape[-2:])
-            return {
+            res = {
                 'image_id': batch['image_id'],
                 'seq_id': batch['seq_id'],
                 'frame_id': batch['frame_id'],
@@ -212,11 +255,25 @@ class YOLOXBaseSystem(BaseSystem):
                     'probability': pred_dict['pred_probabilities'],
                 },
             }
+            vis_pred = res
+
+        if self.image_writer is not None and not self.trainer.sanity_checking and self.active_data_source is not None:
+            self.visualization_count += 1
+            if self.visualization_count >= self.trainer.log_every_n_steps:
+                self.visualization_count = 0
+                self.visualize(batch, features_p, features_f, vis_pred)
+
+        return res
+
+    def on_before_optimizer_step(self, optimizer) -> None:
+        if self.visualization_count == 0:
+            plot_grad_flow(self.neck.named_parameters())
 
     def configure_optimizers(self):
         p_bias, p_norm, p_weight = [], [], []
         all_parameters = []
         all_parameters.extend(self.backbone.named_modules())
+        all_parameters.extend(self.neck.named_modules())
         all_parameters.extend(self.head.named_modules())
         for k, v in all_parameters:
             if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):

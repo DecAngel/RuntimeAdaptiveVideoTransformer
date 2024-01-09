@@ -74,26 +74,39 @@ class EMACallback(Callback):
         "Initialize `ModelEmaV2` from timm to keep a copy of the moving average of the weights"
         self.ema = ModelEmaV2(pl_module, decay=self.decay)
 
+    def on_validation_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        # disable EMA
+        self.ema = None
+
+    def on_test_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.on_validation_start(trainer, pl_module)
+
+    def on_predict_start(self, trainer: "pl.Trainer", pl_module: "pl.LightningModule") -> None:
+        self.on_validation_start(trainer, pl_module)
+
     def on_train_batch_end(
         self, trainer, pl_module, outputs, batch, batch_idx
     ):
         "Update the stored parameters using a moving average"
         # Update currently maintained parameters.
-        self.ema.decay = self.decay * (1 - math.exp(-trainer.global_step / 2000))
-        self.ema.update(pl_module)
+        if self.ema is not None:
+            self.ema.decay = self.decay * (1 - math.exp(-trainer.global_step / 2000))
+            self.ema.update(pl_module)
 
     def on_validation_epoch_start(self, trainer, pl_module):
         "do validation using the stored parameters"
-        # save original parameters before replacing with EMA version
-        self.store(pl_module.parameters())
+        if self.ema is not None:
+            # save original parameters before replacing with EMA version
+            self.store(pl_module.parameters())
 
-        # update the LightningModule with the EMA weights
-        # ~ Copy EMA parameters to LightningModule
-        self.copy_to(self.ema.module.parameters(), pl_module.parameters())
+            # update the LightningModule with the EMA weights
+            # ~ Copy EMA parameters to LightningModule
+            self.copy_to(self.ema.module.parameters(), pl_module.parameters())
 
     def on_validation_epoch_end(self, trainer, pl_module):
         "Restore original parameters to resume training later"
-        self.restore(pl_module.parameters())
+        if self.ema is not None:
+            self.restore(pl_module.parameters())
 
     def on_test_epoch_start(self, trainer, pl_module) -> None:
         self.on_validation_epoch_start(trainer, pl_module)
@@ -109,7 +122,7 @@ class EMACallback(Callback):
 
     def on_train_end(self, trainer, pl_module):
         # update the LightningModule with the EMA weights
-        if self.use_ema_weights:
+        if self.ema is not None and self.use_ema_weights:
             self.copy_to(self.ema.module.parameters(), pl_module.parameters())
             logger.info("End of training. Model weights replaced with the EMA version.")
 

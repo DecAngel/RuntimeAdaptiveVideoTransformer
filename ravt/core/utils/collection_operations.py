@@ -6,7 +6,7 @@ from torch.utils.data import default_collate
 from .array_operations import ArrayType
 
 
-CollectionType = Union[ArrayType, Tuple[ArrayType], List[ArrayType], Dict[ArrayType]]
+CollectionType = Union[ArrayType, Tuple[ArrayType], List[ArrayType], Dict[str, ArrayType]]
 
 
 class ApplyCollection:
@@ -43,7 +43,7 @@ def get_one_element(collection: CollectionType) -> ArrayType:
 
 
 ndarray2tensor = ApplyCollection(torch.from_numpy)
-tensor2ndarray = ApplyCollection(lambda t: t.cpu().numpy())
+tensor2ndarray = ApplyCollection(lambda t: t.detach().cpu().numpy())
 collate = default_collate
 
 

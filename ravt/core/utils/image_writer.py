@@ -3,6 +3,7 @@ from typing import Literal
 
 import cv2
 import numpy as np
+import matplotlib.pyplot as plt
 from ravt.core.configs import output_visualize_dir
 
 
@@ -10,7 +11,7 @@ class ImageWriter:
     def __init__(
             self,
             tag: str,
-            mode: Literal['show_opencv', 'write_image', 'write_video'] = 'write_image',
+            mode: Literal['show_opencv', 'show_plt', 'write_image', 'write_video'] = 'write_image',
             visualization_dir: Path = output_visualize_dir
     ):
         self.tag = tag
@@ -28,6 +29,9 @@ class ImageWriter:
         if self.mode == 'show_opencv':
             cv2.imshow(self.tag, image)
             cv2.waitKey(1)
+        elif self.mode == 'show_plt':
+            plt.figure(self.tag)
+            plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
         elif self.mode == 'write_image':
             cv2.imwrite(str(self.visualization_dir.joinpath(f'{self.tag}_{self.counter:05d}.jpg')), image)
         elif self.mode == 'write_video':

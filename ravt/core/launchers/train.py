@@ -10,7 +10,6 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.strategies import DDPStrategy
 from pytorch_lightning.trainer.states import TrainerStatus
 
-from .visualize import VisualizeCallback
 from ..utils.image_writer import ImageWriter
 from ..utils.lightning_logger import ravt_logger as logger
 from ..utils.progress_bar import NewTqdmProgressBar
@@ -43,11 +42,12 @@ def run_train(
         device_ids: Optional[List[int]] = None,
         debug: bool = __debug__,
         resume: Union[Path, str, Literal['last', 'best'], None] = None,
-        visualize_mode: Optional[Literal['show_opencv', 'write_image', 'write_video']] = None,
+        visualize_mode: Optional[Literal['show_opencv', 'show_plt', 'write_image', 'write_video']] = None,
 ):
     # Init
     device_ids = device_ids or [0]
     time_tag = time.strftime("%d%H%M")
+    system.train()
 
     # Paths
     s = set(locals().keys())
@@ -80,7 +80,7 @@ def run_train(
     variables = locals()
     exp_settings = {
         name: variables[name]
-        for name in ['exp_tag', 'max_epoch', 'device_ids', 'debug', 'resume', 'visualize']
+        for name in ['exp_tag', 'max_epoch', 'device_ids', 'debug', 'resume', 'visualize_mode']
     }
     all_settings = json.dumps({'system_hparams': system.hparams, 'exp_settings': exp_settings}, indent=2)
     logger.info(all_settings)
@@ -103,8 +103,12 @@ def run_train(
         limit_val_batches=10 if debug else None,
         detect_anomaly=True if debug else False,
         profiler='simple' if debug else None,
+        log_every_n_steps=1 if debug else 100,
     )
     trainer.fit(system)
+
+    if visualize_mode is not None:
+        system.image_writer.close()
 
     if trainer.state.status == TrainerStatus.INTERRUPTED:
         # keyboard exit

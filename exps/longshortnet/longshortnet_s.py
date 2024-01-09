@@ -3,14 +3,12 @@ import os
 import sys
 from pathlib import Path
 
-from ravt.core.launchers.test import run_test
-
 root_dir = str(Path(__file__).parents[2].resolve())
 os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Optional
+from typing import Optional, Literal
 
 import torch
 import fire
@@ -19,33 +17,40 @@ import pytorch_lightning as pl
 from ravt.data_sources import ArgoverseDataSource
 from ravt.systems.yolox import longshortnet_s
 from ravt.core.launchers.train import run_train
+from ravt.core.launchers.test import run_test
 
 torch.set_float32_matmul_precision('high')
 
 
 def main(
-        exp_tag: str, predict_num: int = 1, enable_cache: bool = True, seed: Optional[int] = None,
-        train: bool = True,
-        batch_size: Optional[int] = None, device_id: int = 0, visualize: bool = False, debug: bool = False
+        exp_tag: str, predict_num: int = 0, train: bool = True, batch_size: Optional[int] = None, device_id: int = 0,
+        enable_cache: bool = True, seed: Optional[int] = None, debug: bool = False,
+        visualize_mode: Optional[Literal['show_opencv', 'write_image', 'write_video']] = None,
 ):
-    """ Train and test longshortnet_s model on Argoverse-HD
+    """ Train or test longshortnet_s model on Argoverse-HD
 
-    :param train:
     :param exp_tag: the tag for the experiment
     :param predict_num: predict offset for the model
+    :param train: train or test
+    :param batch_size: batch size of the exp
+    :param device_id: the gpu id
     :param enable_cache: use shared memory allocator
     :param seed: the random seed
-    :param batch_size: batch size of the exp, set None to auto-detect
-    :param device_id: the cuda device id to place the model on
-    :param visualize: enable visualization
     :param debug: enable debug mode
+    :param visualize_mode: choose visualization mode
     :return:
     """
     seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
     num_workers = 0 if debug else 8
     system = longshortnet_s(
-        data_source=ArgoverseDataSource(enable_cache=enable_cache),
+        data_sources={
+            'train': ArgoverseDataSource('train', enable_cache=enable_cache),
+            'eval': ArgoverseDataSource('eval', enable_cache=enable_cache),
+            'test': ArgoverseDataSource('test', enable_cache=enable_cache),
+        },
+        batch_size=batch_size,
+        num_workers=num_workers,
         predict_num=predict_num,
         num_classes=8,
         lr=0.001 / 64 * (batch_size or 2),
@@ -59,18 +64,16 @@ def main(
             Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
         )
         res = run_train(
-            system, exp_tag=exp_tag, max_epoch=15,
-            batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-            callback_ema=True, callback_visualize=visualize, resume=None, seed=seed,
+            system, exp_tag=exp_tag, max_epoch=15, device_ids=[device_id], resume=None,
+            debug=debug, visualize_mode=visualize_mode,
         )
     else:
         system.load_from_ckpt(
             Path(root_dir) / 'weights' / 'trained' / 'longshortnet_s_01234_mAP=0.28874_1739105476_061155.ckpt'
         )
         res = run_test(
-            system, exp_tag=exp_tag,
-            batch_size=batch_size, num_workers=num_workers, device_ids=[device_id], debug=debug,
-            callback_visualize=visualize, resume=None, seed=seed,
+            system, exp_tag=exp_tag, device_ids=[device_id], resume=None,
+            debug=debug, visualize_mode=visualize_mode,
         )
     print(json.dumps(res, indent=2))
 

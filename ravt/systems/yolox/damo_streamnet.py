@@ -4,8 +4,8 @@ import kornia.augmentation as ka
 import numpy as np
 import torch
 
-from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy
-from ravt.core.constants import ImageInferenceType, BBoxesInferenceType
+from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy, BaseDataSampler, BaseTransform, BaseMetric
+from ravt.core.constants import SubsetLiteral, BatchTDict
 from ravt.core.utils.array_operations import clip_or_pad_along
 
 from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
@@ -20,8 +20,10 @@ from ravt.transforms import KorniaAugmentation
 class DAMOStreamNetSystem(YOLOXBaseSystem):
     def __init__(
             self,
-            data_source: Optional[BaseDataSource] = None,
+            data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]] = None,
             strategy: Optional[BaseSAPStrategy] = None,
+            batch_size: int = 1,
+            num_workers: int = 0,
 
             # structural parameters
             base_depth: int = 3,
@@ -50,46 +52,17 @@ class DAMOStreamNetSystem(YOLOXBaseSystem):
 
             **kwargs,
     ):
-        self.save_hyperparameters(ignore=['kwargs', 'data_source', 'strategy'])
+        self.save_hyperparameters(ignore=['kwargs', 'data_sources', 'strategy'])
 
         super().__init__(
             backbone=DAMOBackbone(**self.hparams),
             neck=LongShortNeck(**self.hparams),
             head=TALHead(**self.hparams),
+            batch_size=batch_size,
+            num_workers=num_workers,
             with_bbox_0_train=True,
-            data_source=data_source,
+            data_sources=data_sources,
             data_sampler=YOLOXDataSampler(1, [-3, -2, -1, 0], [predict_num], [[-3, -2, -1, 0]], [[0, predict_num]]),
-            transform=KorniaAugmentation(
-                train_aug=ka.VideoSequential(ka.RandomHorizontalFlip()),
-                train_resize=ka.VideoSequential(
-                    *[ka.Resize((h, w)) for h, w in [
-                        (496, 800),
-                        (496, 816),
-                        (512, 832),
-                        (528, 848),
-                        (528, 864),
-                        (544, 880),
-                        (560, 896),
-                        (560, 912),
-                        (576, 928),
-                        (576, 944),
-                        (592, 960),
-                        (608, 976),
-                        (608, 992),
-                        (624, 1008),
-                        (640, 1024),
-                        (640, 1040),
-                        (656, 1056),
-                        (656, 1072),
-                        (672, 1088),
-                        (688, 1104),
-                        (688, 1120),
-                    ]],
-                    random_apply=1,
-                ),
-                eval_aug=None,
-                eval_resize=ka.VideoSequential(ka.Resize((600, 960))),
-            ),
             metric=COCOEvalMAPMetric(future_time_constant=[predict_num]),
             strategy=strategy,
         )
@@ -111,11 +84,12 @@ class DAMOStreamNetSystem(YOLOXBaseSystem):
 
     def inference_impl(
             self,
-            batch: ImageInferenceType,
+            batch: BatchTDict,
             buffer: Optional[YOLOXBuffer],
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
-    ) -> Tuple[BBoxesInferenceType, Optional[Dict]]:
+    ) -> Tuple[BatchTDict, Optional[Dict]]:
+        # TODO: change
         # Ignore ptc and ftc
         images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)
@@ -141,8 +115,10 @@ class DAMOStreamNetSystem(YOLOXBaseSystem):
 
 
 def damo_streamnet_s(
-        data_source: Optional[BaseDataSource] = None,
+        data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]] = None,
         strategy: Optional[BaseSAPStrategy] = None,
+        batch_size: int = 1,
+        num_workers: int = 0,
         predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 1,
@@ -169,8 +145,10 @@ def damo_streamnet_s(
 
 
 def damo_streamnet_m(
-        data_source: Optional[BaseDataSource] = None,
+        data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]] = None,
         strategy: Optional[BaseSAPStrategy] = None,
+        batch_size: int = 1,
+        num_workers: int = 0,
         predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 2,
@@ -199,8 +177,10 @@ def damo_streamnet_m(
 
 
 def damo_streamnet_l(
-        data_source: Optional[BaseDataSource] = None,
+        data_sources: Optional[Dict[SubsetLiteral, BaseDataSource]] = None,
         strategy: Optional[BaseSAPStrategy] = None,
+        batch_size: int = 1,
+        num_workers: int = 0,
         predict_num: int = 1,
         num_classes: int = 8,
         base_depth: int = 3,

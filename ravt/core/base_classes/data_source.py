@@ -10,6 +10,8 @@ class BaseDataSource(Dataset):
     img_dir: Path
     ann_file: Path
 
+    def init(self): raise NotImplementedError()
+
     def get_component(
             self, seq_id: int, frame_id: int, component: ComponentLiteral,
     ) -> ComponentNDict: raise NotImplementedError()

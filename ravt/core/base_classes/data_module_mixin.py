@@ -27,6 +27,28 @@ class DataModuleMixin:
     # data_sampler: Optional[BaseDataSampler]
     # batch_size: int
     # num_workers: int
+    active_data_source: Optional[BaseDataSource] = None
+
+    def setup(self, stage: str) -> None:
+        if stage == 'fit':
+            self.data_sources['train'].init()
+            self.data_sources['eval'].init()
+        elif stage == 'validate':
+            self.data_sources['eval'].init()
+        elif stage == 'test':
+            self.data_sources['test'].init()
+
+    def on_train_epoch_start(self) -> None:
+        super().on_train_epoch_start()
+        self.active_data_source = self.data_sources['train']
+
+    def on_validation_epoch_start(self) -> None:
+        super().on_validation_epoch_start()
+        self.active_data_source = self.data_sources['eval']
+
+    def on_test_epoch_start(self) -> None:
+        super().on_test_epoch_start()
+        self.active_data_source = self.data_sources['test']
 
     def worker_init_fn(self, worker_id: int) -> None:
         import torch.multiprocessing

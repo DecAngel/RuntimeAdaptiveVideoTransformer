@@ -3,6 +3,7 @@ from typing import Optional, Dict, List, Tuple, Protocol, Union
 
 import torch
 import pytorch_lightning as pl
+from torch import nn
 
 from ..constants import BatchNDict, BatchTDict, LossDict
 from .transform import BaseTransform
@@ -18,6 +19,10 @@ class InferenceMixin:
     # trainer: pl.Trainer
     # def log(self, *args, **kwargs): ...
     # def log_dict(self, *args, **kwargs): ...
+
+    @property
+    def fraction_epoch(self):
+        return self.trainer.global_step / self.trainer.estimated_stepping_batches
 
     def inference_impl(
             self,
@@ -51,10 +56,11 @@ class InferenceMixin:
 
     def training_step(self, batch: BatchTDict, *args, **kwargs) -> LossDict:
         output: LossDict = self.forward(batch)
-        self.log('loss', output['loss'], on_step=True, prog_bar=True)
+        self.log_dict(output, on_step=True, prog_bar=True)
         return output
 
     def on_validation_epoch_start(self) -> None:
+        super().on_validation_epoch_start()
         if self.metric is not None:
             self.metric.reset()
 
@@ -65,6 +71,7 @@ class InferenceMixin:
         return output
 
     def on_validation_epoch_end(self) -> None:
+        super().on_validation_epoch_end()
         if not self.trainer.sanity_checking and self.metric is not None:
             metric = self.metric.compute()
             self.log_dict(dict(**metric), on_epoch=True, prog_bar=True)
@@ -72,10 +79,22 @@ class InferenceMixin:
         return None
 
     def on_test_epoch_start(self) -> None:
+        super().on_test_epoch_start()
         return self.on_validation_epoch_start()
 
     def test_step(self, batch: BatchTDict, *args, **kwargs) -> BatchTDict:
         return self.validation_step(batch)
 
     def on_test_epoch_end(self) -> None:
+        super().on_test_epoch_end()
         return self.on_validation_epoch_end()
+
+    @staticmethod
+    def freeze_module(module: nn.Module):
+        for p in module.parameters():
+            p.requires_grad = False
+
+    @staticmethod
+    def unfreeze_module(module: nn.Module):
+        for param in module.parameters():
+            param.requires_grad = True

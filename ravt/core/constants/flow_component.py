@@ -14,7 +14,7 @@ FlowSizeTypeT = Int32[torch.Tensor, '*batch_size time hw=2']
 class FlowComponentNDict(IDComponentNDict, total=False):
     """Flow numpy component of a batch.
 
-    **image**: a HW(YX) flow array with CHW shape in pixels
+    **flow**: a HW(YX) flow array with CHW shape in pixels
 
     **original_size**: Original HW size of flow
     """
@@ -25,7 +25,7 @@ class FlowComponentNDict(IDComponentNDict, total=False):
 class FlowComponentTDict(IDComponentTDict, total=False):
     """Flow tensor component of a batch.
 
-    **image**: a HW(YX) flow array with CHW shape in pixels
+    **flow**: a HW(YX) flow array with CHW shape in pixels
 
     **original_size**: Original HW size of flow
     """

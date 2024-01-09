@@ -1,6 +1,5 @@
 from typing import Optional, Tuple, Literal, List, Dict
 
-import kornia.augmentation as ka
 import numpy as np
 import torch
 
@@ -14,7 +13,6 @@ from .blocks.necks import IdentityNeck
 from .blocks.heads import YOLOXHead
 from ravt.data_samplers import YOLOXDataSampler
 from ravt.metrics import COCOEvalMAPMetric
-from ravt.transforms import KorniaAugmentation
 
 
 class YOLOXSystem(YOLOXBaseSystem):
@@ -75,6 +73,7 @@ class YOLOXSystem(YOLOXBaseSystem):
             past_time_constant: Optional[List[int]] = None,
             future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BatchTDict, Optional[Dict]]:
+        # TODO: change
         # Ignore buffer, ptc and ftc
         images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
         features = self.backbone(images)

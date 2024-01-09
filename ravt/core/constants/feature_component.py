@@ -14,7 +14,7 @@ FeatureSizeTypeT = Int32[torch.Tensor, '*batch_size time hw=2']
 class FeatureComponentNDict(IDComponentNDict, total=False):
     """Feature numpy component of a batch.
 
-    **image**: a feature array with CHW shape in pixels
+    **feature**: a feature array with CHW shape in pixels
 
     **original_size**: Original HW size of feature
     """
@@ -25,7 +25,7 @@ class FeatureComponentNDict(IDComponentNDict, total=False):
 class FeatureComponentTDict(IDComponentTDict, total=False):
     """Feature tensor component of a batch.
 
-    **image**: a feature array with CHW shape in pixels
+    **feature**: a feature array with CHW shape in pixels
 
     **original_size**: Original HW size of feature
     """
