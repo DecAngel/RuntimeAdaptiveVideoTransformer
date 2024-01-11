@@ -266,8 +266,9 @@ class YOLOXBaseSystem(BaseSystem):
         return res
 
     def on_before_optimizer_step(self, optimizer) -> None:
-        if self.visualization_count == 0:
-            plot_grad_flow(self.neck.named_parameters())
+        if self.image_writer is not None and not self.trainer.sanity_checking and self.active_data_source is not None:
+            if self.visualization_count == 0:
+                plot_grad_flow(self.neck.named_parameters())
 
     def configure_optimizers(self):
         p_bias, p_norm, p_weight = [], [], []

@@ -241,7 +241,7 @@ class LinearTANeck(BaseNeck):
     ):
         super().__init__()
         self.num_heads = 4
-        self.window_size = (6, 6)
+        self.window_size = (10, 10)
         self.pe = PositionalEncoding3D(min(in_channels) // 2)
         self.blocks = nn.ModuleList([
             CrossAttentionBlock(c, num_heads=self.num_heads, window_size=self.window_size)

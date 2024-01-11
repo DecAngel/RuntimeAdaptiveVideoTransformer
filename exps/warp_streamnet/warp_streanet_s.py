@@ -81,7 +81,7 @@ def main(
         )
         """
         system.load_from_ckpt(
-            '/home/xzhang1048576/projects/ravt/outputs/checkpoints/warp_streamnet_s_-404_mix_1/mAP=0.18360_081725.ckpt'
+            '/home/xzhang1048576/projects/ravt/outputs/checkpoints/warp_streamnet_s_-16016_mixloss_60/mAP=0.08286_100122.ckpt'
         )
         res = run_test(
             system, exp_tag=exp_tag, device_ids=[device_id], resume=None,

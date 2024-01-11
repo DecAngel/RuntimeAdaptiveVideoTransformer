@@ -72,8 +72,8 @@ class WarpStreamNetSystem(YOLOXBaseSystem):
             data_sources=data_sources,
             data_sampler=YOLOXDataSampler(
                 1, [-self.hparams.predict_num, 0], [self.hparams.predict_num],
-                [[-i, 0] for i in range(1, self.hparams.predict_num + 1)],
-                [[0, i] for i in range(1, self.hparams.predict_num + 1)],
+                [[-i, 0] for i in range(1, 2*self.hparams.predict_num + 1)],
+                [[0, i] for i in range(1, 2*self.hparams.predict_num + 1)],
             ),
             metric=COCOEvalMAPMetric(future_time_constant=[predict_num]),
             strategy=strategy,

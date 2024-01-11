@@ -82,7 +82,7 @@ def main(
         )
     else:
         system.load_from_ckpt(
-            Path(root_dir) / 'weights' / 'trained' / 'msca_s_-3-2-101_mAP=0.26850_260222.ckpt'
+            '/home/xzhang1048576/projects/ravt/outputs/checkpoints/linear_ta_s_-3-2-101_pafpn_20_win10/mAP=0.25687_091935.ckpt'
         )
         res = run_test(
             system, exp_tag=exp_tag, device_ids=[device_id], resume=None,
