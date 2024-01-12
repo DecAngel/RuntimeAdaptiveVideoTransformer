@@ -162,24 +162,29 @@ class LinearTASystem(YOLOXBaseSystem):
         ], axis=2), axis=1, fixed_length=50, pad_value=0.0), new_buffer
 
     def configure_optimizers(self):
-        p_normal, p_wd = [], []
-        all_modules = []
-        all_modules.extend(self.backbone.named_modules(prefix='backbone'))
-        all_modules.extend(self.neck.named_modules(prefix='neck'))
-        all_modules.extend(self.head.named_modules(prefix='head'))
-        for k, v in all_modules:
-            if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
-                p_normal.append(v.bias)
-            if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)) or 'bn' in k:
-                p_normal.append(v.weight)
-            elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
-                p_wd.append(v.weight)  # apply decay
-            if isinstance(v, nn.MultiheadAttention):
-                p_normal.extend(v.parameters(recurse=False))
+        p_backbone_normal, p_backbone_wd = [], []
+        p_neck_normal, p_neck_wd = [], []
+        p_head_normal, p_head_wd = [], []
+        for module, pn, pw in zip(
+            [self.backbone, self.neck, self.head],
+            [p_backbone_normal, p_neck_normal, p_head_normal],
+            [p_backbone_wd, p_neck_wd, p_head_wd],
+        ):
+            for k, v in module.named_modules():
+                if hasattr(v, 'bias') and isinstance(v.bias, nn.Parameter):
+                    pn.append(v.bias)
+                if isinstance(v, (nn.BatchNorm2d, nn.LayerNorm)) or 'bn' in k:
+                    pn.append(v.weight)
+                elif hasattr(v, "weight") and isinstance(v.weight, nn.Parameter):
+                    pw.append(v.weight)  # apply decay
         optimizer = torch.optim.SGD(
             [
-                {'params': p_normal},
-                {'params': p_wd, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_backbone_normal},
+                {'params': p_backbone_wd, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_neck_normal, 'lr': 10*self.hparams.lr},
+                {'params': p_neck_wd, 'lr': 10*self.hparams.lr, 'weight_decay': self.hparams.weight_decay},
+                {'params': p_head_normal, 'lr': 10*self.hparams.lr},
+                {'params': p_head_wd, 'lr': 10*self.hparams.lr, 'weight_decay': self.hparams.weight_decay},
             ],
             lr=self.hparams.lr, momentum=self.hparams.momentum, nesterov=True
         )

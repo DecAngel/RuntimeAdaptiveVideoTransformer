@@ -143,6 +143,7 @@ class CrossAttention(nn.Module):
 
         query = query * self.scale
         attn = query @ key.transpose(-2, -1)
+        # attn = F.relu(attn)
         attn = F.softmax(attn, dim=-1)
         # attn = F.elu(attn, alpha=1) + 1
 
@@ -218,8 +219,8 @@ class CrossAttentionBlock(nn.Module):
         features_f = self.f2w(features[:, -1:].expand(-1, TF, -1, -1, -1))
         features_delta = self.f2w(features[:, -1:] - features[:, :-1])
 
-        query = features_f + 0.1 * future_pe.flatten(1, 3)[:, None, None, ...]
-        key = features_p + 0.1 * past_pe.flatten(1, 3)[:, None, None, ...]
+        query = features_f + 0.5 * future_pe.flatten(1, 3)[:, None, None, ...]
+        key = features_p + 0.5 * past_pe.flatten(1, 3)[:, None, None, ...]
         value = features_delta
 
         query, key, value = self.norm1(query), self.norm1(key), self.norm1(value)
@@ -241,7 +242,7 @@ class LinearTANeck(BaseNeck):
     ):
         super().__init__()
         self.num_heads = 4
-        self.window_size = (10, 10)
+        self.window_size = (6, 6)
         self.pe = PositionalEncoding3D(min(in_channels) // 2)
         self.blocks = nn.ModuleList([
             CrossAttentionBlock(c, num_heads=self.num_heads, window_size=self.window_size)
