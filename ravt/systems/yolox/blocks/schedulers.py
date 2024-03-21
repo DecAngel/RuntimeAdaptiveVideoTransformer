@@ -13,17 +13,12 @@ class StreamYOLOScheduler(torch.optim.lr_scheduler.LambdaLR):
 class MSCAScheduler(torch.optim.lr_scheduler.LambdaLR):
     def __init__(self, optimizer: torch.optim.Optimizer, exp_steps: int, last_epoch=-1):
         def lr(steps: int) -> float:
-            steps_warmup = exp_steps
-            steps_1 = exp_steps * 3
-            steps_2 = exp_steps * 10
-            if steps < steps_warmup:
-                return steps / steps_warmup
-            elif steps < steps_1:
-                return 1 - 0.9 * (steps - steps_warmup) / (steps_1 - steps_warmup)
-            elif steps < steps_2:
-                return 0.1 - 0.05 * (steps - steps_1) / (steps_2 - steps_1)
-            else:
-                return 0.05
+            intervals = [0, exp_steps, exp_steps*2, exp_steps*3, exp_steps*6, exp_steps*1000]
+            values = [0.05, 0.2, 1, 0.2, 0.05]
+            for left, right, v in zip(intervals[:-1], intervals[1:], values):
+                if left <= steps <= right:
+                    return v
+
         super(MSCAScheduler, self).__init__(
             optimizer,
             lr,

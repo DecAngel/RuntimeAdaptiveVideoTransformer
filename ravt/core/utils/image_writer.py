@@ -1,5 +1,6 @@
+from collections import defaultdict
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Optional
 
 import cv2
 import numpy as np
@@ -11,33 +12,38 @@ class ImageWriter:
     def __init__(
             self,
             tag: str,
-            mode: Literal['show_opencv', 'show_plt', 'write_image', 'write_video'] = 'write_image',
+            mode: Literal['show_opencv', 'show_plt', 'show_tensorboard', 'write_image', 'write_video'] = 'write_image',
             visualization_dir: Path = output_visualize_dir
     ):
         self.tag = tag
         self.mode = mode
         self.visualization_dir = visualization_dir
 
-        self.counter = 0
+        self.counter = defaultdict(lambda: 0)
         self.video_writer = None
         self.video_shape = None
 
     def __enter__(self):
         return self
 
-    def write(self, image: np.ndarray):
+    def write(self, image: np.ndarray, subtag: Optional[str] = None):
+        identifier = self.tag if subtag is None else f'{self.tag}_{subtag}'
+        self.counter[subtag] += 1
+        count = self.counter[subtag]
         if self.mode == 'show_opencv':
-            cv2.imshow(self.tag, image)
+            cv2.imshow(identifier, image)
             cv2.waitKey(1)
         elif self.mode == 'show_plt':
-            plt.figure(self.tag)
+            plt.close(identifier)
+            plt.figure(identifier)
             plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB))
+            plt.show()
         elif self.mode == 'write_image':
-            cv2.imwrite(str(self.visualization_dir.joinpath(f'{self.tag}_{self.counter:05d}.jpg')), image)
+            cv2.imwrite(str(self.visualization_dir.joinpath(f'{identifier}_{count:05d}.jpg')), image)
         elif self.mode == 'write_video':
             if self.video_writer is None:
                 self.video_writer = cv2.VideoWriter(
-                    str(self.visualization_dir.joinpath(f'{self.tag}.mp4')),
+                    str(self.visualization_dir.joinpath(f'{identifier}.mp4')),
                     cv2.VideoWriter_fourcc('m', 'p', '4', 'v'),
                     30,
                     (image.shape[1], image.shape[0])
@@ -48,7 +54,6 @@ class ImageWriter:
             self.video_writer.write(image)
         else:
             raise ValueError(f'Unsupported mode {self.mode}')
-        self.counter += 1
 
     def close(self):
         if self.mode == 'write_video' and self.video_writer is not None:

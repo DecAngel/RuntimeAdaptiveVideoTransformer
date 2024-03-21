@@ -2,30 +2,32 @@ import math
 from typing import Callable, Tuple, Dict, Optional, List
 
 import numpy as np
+import torch
+
 from ravt.core.base_classes import BaseSAPStrategy
-from ravt.core.constants import ImageInferenceType, BBoxesInferenceType, BBoxInferenceType
+from ravt.core.constants import BatchTDict
 
 
 class MSCASchedulingStrategy(BaseSAPStrategy):
     def infer_sequence_impl(
             self,
-            input_fn: Callable[[], Tuple[Optional[int], ImageInferenceType]],
-            process_fn: Callable[
-                [ImageInferenceType, Optional[Dict], Optional[List[int]], Optional[List[int]]],
-                Tuple[BBoxesInferenceType, Dict]
-            ],
-            output_fn: Callable[[BBoxInferenceType], None],
+            input_fn: Callable[[], Optional[BatchTDict]],
+            process_fn: Callable[[BatchTDict, Optional[Dict]], Tuple[BatchTDict, Dict]],
+            output_fn: Callable[[BatchTDict], None],
             time_fn: Callable[[], float],
-    ):
+    ) -> None:
         current_fid = -1
         buffer = None
         runtimes = [1]
         runtime_window_size = 5
+
         while True:
-            fid, frame = input_fn()
-            if fid is None:
+            frame = input_fn()
+            if frame is None:
                 break
-            elif fid == current_fid:
+
+            fid = frame['frame_id'].squeeze().cpu().numpy().item()
+            if fid == current_fid:
                 continue
             else:
                 current_fid = fid
@@ -33,7 +35,12 @@ class MSCASchedulingStrategy(BaseSAPStrategy):
             start_fid = time_fn()
             predict_num = min(10, max(1, math.ceil(sum(runtimes) / len(runtimes))))
 
-            res, buffer = process_fn(frame, buffer, list(range(-predict_num, 0)), [predict_num])
+            frame['image']['clip_id'] = fid
+            frame['bbox'] = {
+                'clip_id': torch.ones(1, 1, 1, dtype=torch.long, device=frame['image_id'].device).long() * predict_num
+            }
+
+            res, buffer = process_fn(frame, buffer)
             output_fn(res[0])
 
             last_runtime = time_fn() - start_fid

@@ -4,6 +4,7 @@ from typing import Optional, Dict, List, Tuple, Protocol, Union
 import torch
 import pytorch_lightning as pl
 from torch import nn
+from pytorch_lightning.utilities import rank_zero
 
 from ..constants import BatchNDict, BatchTDict, LossDict
 from .transform import BaseTransform
@@ -55,7 +56,7 @@ class InferenceMixin:
             return self.forward_impl(batch)
 
     def training_step(self, batch: BatchTDict, *args, **kwargs) -> LossDict:
-        output: LossDict = self.forward(batch)
+        output: LossDict = self(batch)
         self.log_dict(output, on_step=True, prog_bar=True)
         return output
 
@@ -65,7 +66,7 @@ class InferenceMixin:
             self.metric.reset()
 
     def validation_step(self, batch: BatchTDict, *args, **kwargs) -> BatchTDict:
-        output: BatchTDict = self.forward(batch)
+        output: BatchTDict = self(batch)
         if not self.trainer.sanity_checking and self.metric is not None:
             self.metric.update(batch, output)
         return output
@@ -73,9 +74,7 @@ class InferenceMixin:
     def on_validation_epoch_end(self) -> None:
         super().on_validation_epoch_end()
         if not self.trainer.sanity_checking and self.metric is not None:
-            metric = self.metric.compute()
-            self.log_dict(dict(**metric), on_epoch=True, prog_bar=True)
-            self.metric.reset()
+            self.log_dict(self.metric.compute(), on_epoch=True, prog_bar=True)
         return None
 
     def on_test_epoch_start(self) -> None:

@@ -143,9 +143,7 @@ class CrossAttention(nn.Module):
 
         query = query * self.scale
         attn = query @ key.transpose(-2, -1)
-        # attn = F.relu(attn)
         attn = F.softmax(attn, dim=-1)
-        # attn = F.elu(attn, alpha=1) + 1
 
         # res = (attn @ value).permute(0, 2, 1, 3).flatten(2, 3)
         res = attn @ value
@@ -164,10 +162,18 @@ class CrossAttentionBlock(nn.Module):
         self.num_heads = num_heads
         self.window_size = window_size
 
-        self.norm1 = nn.LayerNorm(in_channel)
-        self.attn = CrossAttention(in_channel, in_channel, self.num_heads)
-        self.norm2 = nn.LayerNorm(in_channel)
-        self.mlp = nn.Sequential(
+        self.norm1_1 = nn.LayerNorm(in_channel)
+        self.attn1 = CrossAttention(in_channel, in_channel, self.num_heads)
+        self.norm1_2 = nn.LayerNorm(in_channel)
+        self.mlp1 = nn.Sequential(
+            nn.Linear(in_channel, in_channel),
+            nn.ReLU(),
+        )
+
+        self.norm2_1 = nn.LayerNorm(in_channel)
+        self.attn2 = CrossAttention(in_channel, in_channel, self.num_heads)
+        self.norm2_2 = nn.LayerNorm(in_channel)
+        self.mlp2 = nn.Sequential(
             nn.Linear(in_channel, in_channel),
             nn.ReLU(),
             nn.Linear(in_channel, in_channel),
@@ -212,24 +218,53 @@ class CrossAttentionBlock(nn.Module):
             future_pe: Float[torch.Tensor, 'batch_size time_f height_w width_w channels'],
     ) -> Float[torch.Tensor, 'batch_size time_f channels height width']:
         B, _, C, H, W = features.size()
-        _, TP, _, _, _ = past_pe.size()
+        _, TP0, _, _, _ = past_pe.size()
         _, TF, _, _, _ = future_pe.size()
+        TP = TP0 - 1
+        dH, dW = self.window_size
 
-        features_p = self.f2w(features[:, :-1])
-        features_f = self.f2w(features[:, -1:].expand(-1, TF, -1, -1, -1))
-        features_delta = self.f2w(features[:, -1:] - features[:, :-1])
+        features_all = self.combined_f2w(features)
+        features_p = features_all
+        features_f = features_all[:, :, :, -dH*dW:].repeat(1, 1, 1, TF, 1)
 
-        query = features_f + 0.5 * future_pe.flatten(1, 3)[:, None, None, ...]
-        key = features_p + 0.5 * past_pe.flatten(1, 3)[:, None, None, ...]
-        value = features_delta
+        position_p = torch.cat([past_pe.flatten(1, 3)[:, None, None, ...]] * 2, dim=0)
+        position_f = torch.cat([future_pe.flatten(1, 3)[:, None, None, ...]] * 2, dim=0)
+        """
+        features_p = self.combined_f2w(features[:, :-1])
+        features_f = self.combined_f2w(features[:, -1:].expand(-1, TF, -1, -1, -1))
+        features_delta = self.combined_f2w(features[:, -1:] - features[:, :-1])
+        # features_all = torch.cat([features_p, features_f], dim=3)
+        position_p = torch.cat([past_pe.flatten(1, 3)[:, None, None, ...]]*2, dim=0)
+        position_f = torch.cat([future_pe.flatten(1, 3)[:, None, None, ...]]*2, dim=0)
+        # position_all = torch.cat([position_p, position_f], dim=3)
+        """
 
-        query, key, value = self.norm1(query), self.norm1(key), self.norm1(value)
-        res, attn = self.attn(query, key, value)
+        # 1
+        # query = features_all + torch.cat([past_pe, future_pe], dim=1).flatten(1, 3)[:, None, None, ...]
+        query = features_f
+        key = features_p
+        value = features_p
+
+        query, key, value = self.norm1_1(query), self.norm1_1(key), self.norm1_1(value)
+        res, attn = self.attn1(query, key, value)
 
         res = res + features_f
-        res = res + self.mlp(self.norm2(res))
+        res = res + self.mlp1(self.norm1_2(res))
 
-        res = self.w2f(res, (TF, H, W))
+        # 2
+        query = res
+        key = features_p
+        value = features_p
+
+        query, key, value = self.norm2_1(query), self.norm2_1(key), self.norm2_1(value)
+        res, attn = self.attn2(query, key, value)
+
+        res = res + features_f
+        res = res + self.mlp2(self.norm2_2(res))
+
+        # res = res[:, :, :, TP*dH*dW:]
+
+        res = self.combined_w2f(res, (TF, H, W))
 
         return res
 
@@ -241,7 +276,7 @@ class LinearTANeck(BaseNeck):
             **kwargs,
     ):
         super().__init__()
-        self.num_heads = 4
+        self.num_heads = 1
         self.window_size = (6, 6)
         self.pe = PositionalEncoding3D(min(in_channels) // 2)
         self.blocks = nn.ModuleList([
@@ -258,8 +293,10 @@ class LinearTANeck(BaseNeck):
         if past_time_constant is None:
             TP = features[0].size(1) - 1
             past_time_constant = torch.arange(
-                -TP, -1, step=1, dtype=torch.float32, device=features[0].device
+                -TP, 1, step=1, dtype=torch.float32, device=features[0].device
             )[None, ...]
+        else:
+            past_time_constant = torch.cat([past_time_constant, torch.zeros_like(past_time_constant[:, :1])], dim=1)
         if future_time_constant is None:
             future_time_constant = torch.tensor([[1]], dtype=torch.float32, device=features[0].device)
 

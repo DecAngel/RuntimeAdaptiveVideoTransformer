@@ -38,3 +38,4 @@ def plot_grad_flow(named_parameters):
                 Line2D([0], [0], color="b", lw=4),
                 Line2D([0], [0], color="k", lw=4)], ['max-gradient', 'mean-gradient', 'zero-gradient'])
     plt.show()
+    plt.savefig("grad_check.png")

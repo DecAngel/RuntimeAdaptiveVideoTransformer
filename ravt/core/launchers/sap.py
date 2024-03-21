@@ -19,12 +19,14 @@ import torch
 from pycocotools.coco import COCO
 from sap_toolkit.client import EvalClient
 from sap_toolkit.generated import eval_server_pb2
+from torch.utils.data import default_collate
 from tqdm import tqdm
 
 from ..base_classes import BaseSystem
 from ..constants import BatchTDict, BatchNDict
 from ..utils.lightning_logger import ravt_logger as logger
 from ..utils.array_operations import remove_pad_along
+from ..utils.collection_operations import reverse_collate, tensor2ndarray, select_collate, to_device
 from ..configs import output_sap_log_dir
 
 
@@ -157,7 +159,7 @@ def run_sap(
         try:
             # load coco dataset
             with contextlib.redirect_stdout(io.StringIO()):
-                coco = COCO(str(system.data_sources['test'].ann_file()))
+                coco = COCO(str(system.data_sources['test'].ann_file))
             seqs = coco.dataset['sequences']
 
             def resize_image(img: np.ndarray) -> np.ndarray:
@@ -166,28 +168,29 @@ def run_sap(
                     img, (w // dataset_resize_ratio, h // dataset_resize_ratio)
                 )
 
-            def recv_fn() -> Optional[BatchNDict]:
+            def recv_fn() -> Optional[BatchTDict]:
                 frame_id_next, frame = client.get_frame()
                 if frame_id_next is not None:
                     original_size = np.array(frame.shape[:2])
                     frame = resize_image(frame)[..., [2, 1, 0]].transpose(2, 0, 1)
-                    return {
+                    return to_device(default_collate([{
                         'image_id': np.array(frame_id_next),
                         'seq_id': np.array(0),
                         'frame_id': np.array(frame_id_next),
-                        'image': {
+                        'image': default_collate([{
                             'image': frame,
                             'original_size': original_size,
                             'clip_id': np.array(0),
-                        }
-                    }
+                        }])
+                    }]), system.device)
                 else:
                     return None
 
-            def send_fn(batch: BatchNDict) -> None:
-                coordinate = remove_pad_along(batch['bbox']['coordinate'], axis=0) * dataset_resize_ratio
-                probability = batch['bbox']['probability'][:coordinate.shape[0]]
-                label = batch['bbox']['label'][:coordinate.shape[0]]
+            def send_fn(batch: BatchTDict) -> None:
+                bbox = tensor2ndarray(select_collate(select_collate(batch, 0)['bbox'], 0))
+                coordinate = remove_pad_along(bbox['coordinate'], axis=0) * dataset_resize_ratio
+                probability = bbox['probability'][:coordinate.shape[0]]
+                label = bbox['label'][:coordinate.shape[0]]
                 client.send_result_to_server(coordinate, probability, label)
                 return None
 
@@ -196,9 +199,9 @@ def run_sap(
 
             # warm_up
             for _ in range(2):
-                system.inference(system.example_input_array[0], None)
+                system.inference(to_device(system.example_input_array[0], system.device), None)
                 # system.inference(resize_image(np.zeros((1200, 1920, 3), dtype=np.uint8)), None)
-            torch.cuda.synchronize(device=torch.device(f'cuda:{device_id or 0}'))
+            torch.cuda.synchronize(device=system.device)
 
             for i, seq_id in enumerate(tqdm(seqs)):
                 client.request_stream(seq_id)

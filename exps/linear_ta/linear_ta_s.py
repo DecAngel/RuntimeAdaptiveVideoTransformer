@@ -8,7 +8,7 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Optional, Literal, List, Union
+from typing import Optional, Literal, List, Union, Tuple
 
 import torch
 import fire
@@ -24,7 +24,7 @@ torch.set_float32_matmul_precision('high')
 
 def main(
         exp_tag: str, past_time_constant: List[int], future_time_constant: List[int],
-        train: bool = True, batch_size: Optional[int] = None, device_id: int = 0,
+        train: bool = True, batch_size: Optional[int] = None, device_ids: Tuple[int, ...] = (0, ),
         enable_cache: bool = True, seed: Optional[int] = None, debug: bool = False,
         visualize_mode: Optional[Literal['show_opencv', 'show_plt', 'write_image', 'write_video']] = None,
         backbone: Literal['pafpn', 'drfpn'] = 'pafpn',
@@ -35,10 +35,11 @@ def main(
     :param train_scheduler:
     :param backbone:
     :param exp_tag: the tag for the experiment
-    :param predict_num: predict offset for the model
+    :param past_time_constant:
+    :param future_time_constant:
     :param train: train or test
     :param batch_size: batch size of the exp
-    :param device_id: the gpu id
+    :param device_ids: the gpu ids
     :param enable_cache: use shared memory allocator
     :param seed: the random seed
     :param debug: enable debug mode
@@ -47,6 +48,7 @@ def main(
     """
     seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
+    effective_batch_size = batch_size * len(device_ids)
     num_workers = 0 if debug else 8
     system = linear_ta_s(
         data_sources={
@@ -61,7 +63,7 @@ def main(
         backbone=backbone,
         train_scheduler=train_scheduler,
         num_classes=8,
-        lr=0.001 / 64 * (batch_size or 2),
+        lr=0.001 / 64 * effective_batch_size,
         momentum=0.9,
         weight_decay=5e-4,
         conf_thre=0.01,
@@ -77,15 +79,15 @@ def main(
                 Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s_drfpn.pth'
             )
         res = run_train(
-            system, exp_tag=exp_tag, max_epoch=15, device_ids=[device_id], resume=None,
+            system, exp_tag=exp_tag, max_epoch=15, device_ids=list(device_ids), resume=None,
             debug=debug, visualize_mode=visualize_mode,
         )
     else:
         system.load_from_ckpt(
-            '/home/xzhang1048576/projects/ravt/outputs/checkpoints/linear_ta_s_-3-2-101_pafpn_20_win10/mAP=0.25687_091935.ckpt'
+            '/home/xzhang1048576/projects/ravt/outputs/checkpoints/linear_ta_s_-3-2-101_pafpn_softmax_win6_lr10_100/mAP=0.30041_151021.ckpt'
         )
         res = run_test(
-            system, exp_tag=exp_tag, device_ids=[device_id], resume=None,
+            system, exp_tag=exp_tag, device_ids=list(device_ids), resume=None,
             debug=debug, visualize_mode=visualize_mode,
         )
     print(json.dumps(res, indent=2))

@@ -55,7 +55,7 @@ class DataModuleMixin:
         torch.multiprocessing.set_sharing_strategy('file_system')
         seed = uuid.uuid4().int % 2 ** 32
         pl.seed_everything(seed)
-        logger.info(f'Initializing worker {worker_id} with seed {seed}')
+        # logger.info(f'Initializing worker {worker_id} with seed {seed}')
 
     def train_dataloader(self):
         return DataLoader(

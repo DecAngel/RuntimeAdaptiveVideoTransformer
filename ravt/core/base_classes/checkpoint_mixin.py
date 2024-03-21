@@ -1,14 +1,14 @@
 import contextlib
 from pathlib import Path
-from typing import Dict, Union, List, Tuple
+from typing import Dict, Union
 
 import torch
 
 from ..utils.lightning_logger import ravt_logger as logger
 
 
+# TODO: add strict in 'load_from_pth', check when strict=False
 class CheckpointMixin:
-    # device: torch.device
     # def state_dict(self) -> Dict: ...
     # def load_state_dict(self, state_dict: Dict, strict: bool = False) -> Tuple[List[str], List[str]]: ...
 
@@ -41,7 +41,7 @@ class CheckpointMixin:
         self.load_state_dict(
             torch.load(
                 str(file_path),
-                map_location=self.device
+                map_location='cpu'
             )['state_dict'],
             strict=strict,
         )

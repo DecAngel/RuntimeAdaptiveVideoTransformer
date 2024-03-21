@@ -25,6 +25,9 @@ dataset_configs = {
     'train': (img_dir, ann_dir.joinpath('train.json')),
     'eval': (img_dir, ann_dir.joinpath('val.json')),
     'test': (img_dir, ann_dir.joinpath('val.json')),
+    'train2': (img_dir, ann_dir.joinpath('train1.json')),
+    'eval2': (img_dir, ann_dir.joinpath('train2.json')),
+    'test2': (img_dir, ann_dir.joinpath('val.json')),
 }
 
 

@@ -5,7 +5,9 @@ import json
 import tempfile
 from typing import Optional, List
 
+import numpy as np
 import torch
+from torchmetrics.utilities import dim_zero_cat
 from pycocotools.coco import COCO
 
 from ravt.core.constants import BatchTDict, MetricDict
@@ -31,14 +33,14 @@ ravt_logger.info(coco_eval_version)
 class COCOEvalMAPMetric(BaseMetric):
     is_differentiable: bool = False
     higher_is_better: Optional[bool] = True
-    full_state_update: bool = True
+    full_state_update: bool = False
 
     def __init__(self, future_time_constant: Optional[List[int]] = None):
         super().__init__(
             dist_sync_on_step=False,
             process_group=None,
             dist_sync_fn=None,
-            compute_on_cpu=True,
+            compute_on_cpu=False,
         )
         self.coco: Optional[COCO] = None
         self.future_time_constant = future_time_constant or [0]
@@ -59,10 +61,10 @@ class COCOEvalMAPMetric(BaseMetric):
         current_size = torch.tensor(batch['image']['image'].shape[-2:], dtype=torch.float32, device=self.device)  # (2)
         r = (original_size / current_size)[..., [1, 0, 1, 0]]
 
-        image_ids = (pred['image_id'][..., None] + pred['bbox']['clip_id']).cpu()
-        category_ids = pred['bbox']['label'].cpu()
-        bboxes = xyxy2xywh(r*pred['bbox']['coordinate']).cpu()
-        scores = pred['bbox']['probability'].cpu()
+        image_ids = pred['image_id'][..., None] + pred['bbox']['clip_id']
+        category_ids = pred['bbox']['label']
+        bboxes = xyxy2xywh(r*pred['bbox']['coordinate'])
+        scores = pred['bbox']['probability']
         for i, (ii, c, b, s) in enumerate(zip(
                 image_ids.unbind(1), category_ids.unbind(1), bboxes.unbind(1), scores.unbind(1)
         )):
@@ -80,22 +82,21 @@ class COCOEvalMAPMetric(BaseMetric):
         res = {}
         for i, t in enumerate(self.future_time_constant):
             outputs = []
-            for ii, c, b, p in zip(
-                getattr(self, f'image_id_list_{i}'),
-                getattr(self, f'category_id_list_{i}'),
-                getattr(self, f'bbox_list_{i}'),
-                getattr(self, f'score_list_{i}'),
-            ):
-                ii = ii.numpy().item()
-                for _c, _b, _p in zip(c.numpy(), b.numpy(), p.numpy()):
-                    if _p > 1e-5:
-                        outputs.append({
-                            'image_id': ii,
-                            'category_id': _c.item(),
-                            'bbox': _b.tolist(),
-                            'score': _p.item(),
-                            'segmentation': [],
-                        })
+            ii = dim_zero_cat(getattr(self, f'image_id_list_{i}')).cpu().numpy()
+            c = dim_zero_cat(getattr(self, f'category_id_list_{i}')).cpu().numpy()
+            b = dim_zero_cat(getattr(self, f'bbox_list_{i}')).cpu().numpy()
+            p = dim_zero_cat(getattr(self, f'score_list_{i}')).cpu().numpy()
+            n_obj = c.shape[0] // ii.shape[0]
+            ii = np.repeat(ii, n_obj, axis=0)
+            mask = p > 1e-5
+            for _ii, _c, _b, _p in zip(ii[mask], c[mask], b[mask], p[mask]):
+                outputs.append({
+                    'image_id': _ii.item(),
+                    'category_id': _c.item(),
+                    'bbox': _b.tolist(),
+                    'score': _p.item(),
+                    'segmentation': [],
+                })
 
             if len(outputs) == 0:
                 return {'mAP': torch.tensor(0.0, dtype=torch.float32, device=self.device)}

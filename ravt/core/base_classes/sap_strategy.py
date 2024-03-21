@@ -16,9 +16,9 @@ class BaseSAPStrategy:
 
     def infer_sequence(
             self,
-            input_fn: Callable[[], Optional[BatchNDict]],
+            input_fn: Callable[[], Optional[BatchTDict]],
             process_fn: Callable[[BatchTDict, Optional[Dict]], Tuple[BatchTDict, Dict]],
-            output_fn: Callable[[BatchNDict], None],
+            output_fn: Callable[[BatchTDict], None],
             time_fn: Callable[[], float],
     ) -> None:
         if self.first_time:
@@ -52,9 +52,9 @@ class BaseSAPStrategy:
 
     def infer_sequence_impl(
             self,
-            input_fn: Callable[[], Optional[BatchNDict]],
+            input_fn: Callable[[], Optional[BatchTDict]],
             process_fn: Callable[[BatchTDict, Optional[Dict]], Tuple[BatchTDict, Dict]],
-            output_fn: Callable[[BatchNDict], None],
+            output_fn: Callable[[BatchTDict], None],
             time_fn: Callable[[], float],
     ) -> None: raise NotImplementedError()
 

@@ -2,6 +2,7 @@ from typing import Optional, Tuple, Literal, List, Dict
 
 import numpy as np
 import torch
+from jaxtyping import Float
 
 from ravt.core.base_classes import BaseDataSource, BaseSAPStrategy, BaseDataSampler, BaseTransform, BaseMetric
 from ravt.core.constants import SubsetLiteral, BatchTDict
@@ -70,20 +71,26 @@ class YOLOXSystem(YOLOXBaseSystem):
             self,
             batch: BatchTDict,
             buffer: Optional[YOLOXBuffer],
-            past_time_constant: Optional[List[int]] = None,
-            future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BatchTDict, Optional[Dict]]:
-        # TODO: change
         # Ignore buffer, ptc and ftc
-        images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images: Float[torch.Tensor, 'B TP0 C H W'] = batch['image']['image'].float()
+        past_time_constant = batch['image']['clip_id'][:, :-1].float()
+        future_time_constant = batch['bbox']['clip_id'].float()
+
         features = self.backbone(images)
         pred_dict = self.head(features, shape=images.shape[-2:])
 
-        return clip_or_pad_along(np.concatenate([
-            pred_dict['pred_coordinates'].cpu().numpy()[0],
-            pred_dict['pred_probabilities'].cpu().numpy()[0, :, :, None],
-            pred_dict['pred_labels'].cpu().numpy()[0, :, :, None].astype(float),
-        ], axis=2), axis=1, fixed_length=50, pad_value=0.0), {}
+        return {
+            'image_id': batch['image_id'],
+            'seq_id': batch['seq_id'],
+            'frame_id': batch['frame_id'],
+            'bbox': {
+                'clip_id': batch['bbox']['clip_id'],
+                'coordinate': pred_dict['pred_coordinates'],
+                'label': pred_dict['pred_labels'],
+                'probability': pred_dict['pred_probabilities'],
+            },
+        }, {}
 
 
 def yolox_s(

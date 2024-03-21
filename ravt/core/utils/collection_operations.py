@@ -1,3 +1,4 @@
+import collections
 from typing import Dict, List, Union, Callable, Tuple
 
 import torch
@@ -14,6 +15,34 @@ class ApplyCollection:
         self.fn = fn
 
     def __call__(self, collection: CollectionType) -> CollectionType:
+        elem_type = type(collection)
+        if isinstance(data, torch.Tensor):
+            return data
+        elif elem_type.__module__ == 'numpy' and elem_type.__name__ != 'str_' \
+                and elem_type.__name__ != 'string_':
+            # array of string classes and object
+            if elem_type.__name__ == 'ndarray' \
+                    and np_str_obj_array_pattern.search(data.dtype.str) is not None:
+                return data
+            return torch.as_tensor(data)
+        elif isinstance(data, collections.abc.Mapping):
+            try:
+                return elem_type({key: default_convert(data[key]) for key in data})
+            except TypeError:
+                # The mapping type may not support `__init__(iterable)`.
+                return {key: default_convert(data[key]) for key in data}
+        elif isinstance(data, tuple) and hasattr(data, '_fields'):  # namedtuple
+            return elem_type(*(default_convert(d) for d in data))
+        elif isinstance(data, tuple):
+            return [default_convert(d) for d in data]  # Backwards compatibility.
+        elif isinstance(data, collections.abc.Sequence) and not isinstance(data, string_classes):
+            try:
+                return elem_type([default_convert(d) for d in data])
+            except TypeError:
+                # The sequence type may not support `__init__(iterable)` (e.g., `range`).
+                return [default_convert(d) for d in data]
+        else:
+            return data
         if isinstance(collection, dict):
             new_dict = {}
             for k, v in collection.items():
@@ -54,3 +83,7 @@ def reverse_collate(collection: CollectionType) -> List[CollectionType]:
 
 def select_collate(collection: CollectionType, batch_id: int) -> CollectionType:
     return ApplyCollection(lambda t: t[batch_id])(collection)
+
+
+def to_device(collection: CollectionType, device: torch.device) -> CollectionType:
+    return ApplyCollection(lambda t: t.to(device))(collection)

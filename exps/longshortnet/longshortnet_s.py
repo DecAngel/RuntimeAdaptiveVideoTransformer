@@ -8,7 +8,7 @@ os.chdir(root_dir)
 sys.path.append(root_dir)
 print(f'Working Directory: {root_dir}')
 
-from typing import Optional, Literal
+from typing import Optional, Literal, Tuple
 
 import torch
 import fire
@@ -23,9 +23,10 @@ torch.set_float32_matmul_precision('high')
 
 
 def main(
-        exp_tag: str, predict_num: int = 0, train: bool = True, batch_size: Optional[int] = None, device_id: int = 0,
+        exp_tag: str, predict_num: int = 0,
+        train: bool = True, batch_size: Optional[int] = None, device_ids: Tuple[int, ...] = (0, ),
         enable_cache: bool = True, seed: Optional[int] = None, debug: bool = False,
-        visualize_mode: Optional[Literal['show_opencv', 'write_image', 'write_video']] = None,
+        visualize_mode: Optional[Literal['show_opencv', 'show_plt', 'write_image', 'write_video']] = None,
 ):
     """ Train or test longshortnet_s model on Argoverse-HD
 
@@ -33,7 +34,7 @@ def main(
     :param predict_num: predict offset for the model
     :param train: train or test
     :param batch_size: batch size of the exp
-    :param device_id: the gpu id
+    :param device_ids: the gpu ids
     :param enable_cache: use shared memory allocator
     :param seed: the random seed
     :param debug: enable debug mode
@@ -42,6 +43,7 @@ def main(
     """
     seed = pl.seed_everything(seed)
     batch_size = 4 if debug else batch_size
+    effective_batch_size = batch_size * len(device_ids)
     num_workers = 0 if debug else 8
     system = longshortnet_s(
         data_sources={
@@ -53,7 +55,7 @@ def main(
         num_workers=num_workers,
         predict_num=predict_num,
         num_classes=8,
-        lr=0.001 / 64 * (batch_size or 2),
+        lr=0.001 / 64 * effective_batch_size,
         momentum=0.9,
         weight_decay=5e-4,
         conf_thre=0.01,
@@ -64,7 +66,7 @@ def main(
             Path(root_dir) / 'weights' / 'pretrained' / 'yolox_s.pth'
         )
         res = run_train(
-            system, exp_tag=exp_tag, max_epoch=15, device_ids=[device_id], resume=None,
+            system, exp_tag=exp_tag, max_epoch=15, device_ids=list(device_ids), resume=None,
             debug=debug, visualize_mode=visualize_mode,
         )
     else:
@@ -72,7 +74,7 @@ def main(
             Path(root_dir) / 'weights' / 'trained' / 'longshortnet_s_01234_mAP=0.28874_1739105476_061155.ckpt'
         )
         res = run_test(
-            system, exp_tag=exp_tag, device_ids=[device_id], resume=None,
+            system, exp_tag=exp_tag, device_ids=list(device_ids), resume=None,
             debug=debug, visualize_mode=visualize_mode,
         )
     print(json.dumps(res, indent=2))

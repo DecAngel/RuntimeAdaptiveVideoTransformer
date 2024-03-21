@@ -2,7 +2,7 @@ import json
 import platform
 import time
 from pathlib import Path
-from typing import List, Optional, Union, Literal
+from typing import List, Optional, Union, Literal, OrderedDict
 
 import pytorch_lightning as pl
 import torch
@@ -104,6 +104,7 @@ def run_train(
         detect_anomaly=True if debug else False,
         profiler='simple' if debug else None,
         log_every_n_steps=1 if debug else 100,
+        sync_batchnorm=True if len(device_ids) > 1 else False
     )
     trainer.fit(system)
 

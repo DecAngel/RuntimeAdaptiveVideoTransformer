@@ -1,8 +1,10 @@
+import itertools
 import random
 from typing import Optional, Tuple, Literal, List, Union, Dict
 
 import numpy as np
 import torch
+from jaxtyping import Float
 from torch import nn
 
 from ravt.core.constants import (
@@ -16,12 +18,15 @@ from ravt.core.utils.lightning_logger import ravt_logger as logger
 
 from .yolox_base import YOLOXBaseSystem, YOLOXBuffer, concat_pyramids
 from .blocks.backbones import YOLOXPAFPNBackbone, DAMOBackbone
-from .blocks.necks import LinearTANeck
+from .blocks.necks import LinearTANeck, FPCANeck
 from .blocks.heads import TALHead
 from .blocks.schedulers import StreamYOLOScheduler, MSCAScheduler
 from ravt.data_samplers import YOLOXDataSampler
 from ravt.metrics import COCOEvalMAPMetric
 from ...core.utils.grad_check import plot_grad_flow
+
+
+MAX_PAST = 3
 
 
 class LinearTASystem(YOLOXBaseSystem):
@@ -68,9 +73,17 @@ class LinearTASystem(YOLOXBaseSystem):
     ):
         self.save_hyperparameters(ignore=['kwargs', 'data_sources', 'strategy'])
 
+        train_image_clip = [[*past_time_constant, 0]]
+        train_bbox_clip = [[0, *future_time_constant]]
+        if len(past_time_constant) > 100000000:
+            train_image_clip = [[*i, 0] for i in itertools.combinations(past_time_constant, len(past_time_constant)-1)]
+            train_bbox_clip = [[0, *future_time_constant]]*len(train_image_clip)
+        print(train_image_clip)
+        print(train_bbox_clip)
+
         super().__init__(
             backbone=YOLOXPAFPNBackbone(**self.hparams) if backbone == 'pafpn' else DAMOBackbone(**self.hparams),
-            neck=LinearTANeck(**self.hparams),
+            neck=FPCANeck(**self.hparams),
             head=TALHead(**self.hparams),
             batch_size=batch_size,
             num_workers=num_workers,
@@ -78,7 +91,7 @@ class LinearTASystem(YOLOXBaseSystem):
             data_sources=data_sources,
             data_sampler=YOLOXDataSampler(
                 1, [*past_time_constant, 0], future_time_constant,
-                [[*past_time_constant, 0]], [[0, *future_time_constant]]
+                train_image_clip, train_bbox_clip
             ),
             metric=COCOEvalMAPMetric(future_time_constant=future_time_constant),
             strategy=strategy,
@@ -106,12 +119,14 @@ class LinearTASystem(YOLOXBaseSystem):
             self,
             batch: BatchTDict,
             buffer: Optional[YOLOXBuffer],
-            past_time_constant: Optional[List[int]] = None,
-            future_time_constant: Optional[List[int]] = None,
     ) -> Tuple[BatchTDict, Optional[Dict]]:
         # TODO: change
-        images = torch.from_numpy(batch.astype(np.float32)).permute(2, 0, 1)[None, None, ...].to(device=self.device)
+        images: Float[torch.Tensor, 'B TP0 C H W'] = batch['image']['image'].float()
+        past_time_constant = batch['image']['clip_id'][:, :-1].float()
+        future_time_constant = batch['bbox']['clip_id'].float()
+
         features = self.backbone(images)
+        future_features = self.neck.forward(features, past_time_constant, future_time_constant)
 
         if buffer is not None:
             past_indices = buffer['prev_indices']
